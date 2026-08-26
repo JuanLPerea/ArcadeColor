@@ -42,13 +42,41 @@ extern uint16_t st7789_screen_h;
 
 void st7789_init(void);
 void st7789_set_window(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1);
+
+// ---------------------------------------------------------
+// DOBLE BUFFER (framebuffer en RAM)
+// ---------------------------------------------------------
+// A partir de ahora, TODAS las funciones de dibujo de más abajo
+// (draw_pixel, fill_rect, fill_screen, draw_char, draw_text)
+// escriben en un framebuffer que vive en RAM -- no tocan el SPI
+// para nada. La pantalla física no cambia hasta que llamas a
+// st7789_flush().
+//
+// Esto tiene dos efectos importantes a tener en cuenta:
+//
+//  1) Nada se ve en pantalla hasta que llamas a st7789_flush().
+//     Puedes hacer todos los draw_*/fill_* que quieras entre dos
+//     flush -- se acumulan en RAM sin coste de SPI -- pero como
+//     mínimo necesitas un flush al final de cada "frame" visible.
+//
+//  2) st7789_flush() solo transmite la zona que realmente ha
+//     cambiado desde el último flush (rectángulo "sucio"), no la
+//     pantalla entera. Eso es importante por el tipo de conexión:
+//     a 20 MHz por SPI, una pantalla completa (320x240x2 bytes)
+//     tarda ~60 ms en transmitirse; una sola fila de texto que
+//     cambia, en cambio, son solo unos pocos ms. Si necesitas
+//     forzar un refresco completo (p.ej. tras cambiar de juego),
+//     usa st7789_fill_screen() antes del flush: al escribir sobre
+//     toda la pantalla, marca toda la pantalla como sucia.
+void st7789_flush(void);
+
 void st7789_fill_screen(uint16_t color);
 void st7789_draw_pixel(uint16_t x, uint16_t y, uint16_t color);
 void st7789_fill_rect(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16_t color);
 
 // ---------------------------------------------------------
-// Texto (fuente bitmap 5x7). Soporta may\u00fasculas, d\u00edgitos,
-// espacio, ':' , '.' y '-'. Cualquier otro car\u00e1cter se
+// Texto (fuente bitmap 5x7). Soporta mayúsculas, dígitos,
+// espacio, ':' , '.' y '-'. Cualquier otro carácter se
 // dibuja en blanco (hueco).
 // ---------------------------------------------------------
 #define FONT_WIDTH  5
@@ -59,13 +87,25 @@ void st7789_draw_text(uint16_t x, uint16_t y, const char *str, uint16_t color, u
 uint16_t st7789_text_width(const char *str, uint8_t scale);
 
 // ---------------------------------------------------------
-// Volcado rápido de un buffer de píxeles completo (framebuffer).
-// A diferencia de draw_pixel/fill_rect, fija la ventana UNA sola
-// vez y transmite todo el bloque de datos seguido, sin reabrir
-// la ventana por cada píxel. Imprescindible para animaciones
-// fluidas a pantalla completa.
+// st7789_blit: vuelca un buffer de píxeles EXTERNO directo al
+// panel, EN EL ACTO, sin pasar por el framebuffer interno ni por
+// el rectángulo sucio. Útil si algún juego ya lo usaba así y
+// necesita la máxima velocidad para un sprite puntual.
+//
+// OJO si lo mezclas con las funciones de dibujo de arriba: como
+// éstas se acumulan en RAM hasta el siguiente st7789_flush() y
+// st7789_blit() en cambio escribe al momento, el orden en que
+// aparecen en pantalla puede no coincidir con el orden en que las
+// llamas. Si quieres que un sprite externo respete el mismo orden
+// que el resto del frame, usa st7789_blit_to_buffer() en su lugar.
 // ---------------------------------------------------------
 void st7789_blit(uint16_t x0, uint16_t y0, uint16_t w, uint16_t h, const uint16_t *buf);
+
+// Igual que st7789_blit, pero copia el buffer externo AL
+// framebuffer interno (marcando la zona como sucia) en vez de
+// escribir directo al SPI. Se muestra en el siguiente
+// st7789_flush(), igual que el resto de dibujo.
+void st7789_blit_to_buffer(uint16_t x0, uint16_t y0, uint16_t w, uint16_t h, const uint16_t *buf);
 
 // ---------------------------------------------------------
 // Rotación de pantalla: 0=0°, 1=90°, 2=180°, 3=270°.
@@ -73,6 +113,13 @@ void st7789_blit(uint16_t x0, uint16_t y0, uint16_t w, uint16_t h, const uint16_
 // Llamar después de st7789_init(). Si al probarla la imagen no
 // queda como se espera, prueba con los otros valores (0-3):
 // alguno de ellos será el correcto para tu panel concreto.
+//
+// NOTA: el framebuffer interno está reservado para el tamaño
+// máximo del panel (320x240, el mismo número de píxeles en
+// cualquier rotación), así que cambiar de rotación en marcha no
+// necesita reservar más memoria -- pero si lo haces a media
+// ejecución, fuerza un st7789_fill_screen() + st7789_flush() para
+// que el rectángulo sucio se recalcule con las dimensiones nuevas.
 // ---------------------------------------------------------
 void st7789_set_rotation(uint8_t rotation);
 

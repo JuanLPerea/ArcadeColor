@@ -2,6 +2,7 @@
 #include "pico/stdlib.h"
 #include "hardware/spi.h"
 #include "hardware/gpio.h"
+#include <string.h>
 
 // ---------------------------------------------------------
 // Comandos ST7789 usados
@@ -40,6 +41,47 @@ static void write_data(const uint8_t *data, size_t len) {
 
 static inline void write_data_byte(uint8_t b) {
     write_data(&b, 1);
+}
+
+// ---------------------------------------------------------
+// Framebuffer (doble buffer)
+//
+// Se guarda YA en formato "de cable": 2 bytes por píxel, byte
+// alto primero (el orden que espera el ST7789 por SPI). Así, al
+// hacer flush(), los bytes se envían tal cual están en memoria,
+// sin ningún paso de recomposición byte a byte.
+//
+// El tamaño se reserva para el número máximo de píxeles del panel
+// (320*240 = 76800), que es el mismo total en cualquier rotación
+// (0-3) porque solo cambia cuál de las dos dimensiones es "ancho".
+// ---------------------------------------------------------
+#define FB_MAX_PIXELS ((uint32_t)320 * 240)
+static uint8_t framebuffer[FB_MAX_PIXELS * 2];
+
+// Rectángulo "sucio": la zona mínima que ha cambiado desde el
+// último flush. Coordenadas inclusivas.
+static bool fb_dirty = false;
+static uint16_t fb_dirty_x0, fb_dirty_y0, fb_dirty_x1, fb_dirty_y1;
+
+static inline void mark_dirty(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1) {
+    if (x0 >= TFT_WIDTH || y0 >= TFT_HEIGHT) return;
+    if (x1 >= TFT_WIDTH)  x1 = TFT_WIDTH - 1;
+    if (y1 >= TFT_HEIGHT) y1 = TFT_HEIGHT - 1;
+
+    if (!fb_dirty) {
+        fb_dirty_x0 = x0; fb_dirty_y0 = y0;
+        fb_dirty_x1 = x1; fb_dirty_y1 = y1;
+        fb_dirty = true;
+    } else {
+        if (x0 < fb_dirty_x0) fb_dirty_x0 = x0;
+        if (y0 < fb_dirty_y0) fb_dirty_y0 = y0;
+        if (x1 > fb_dirty_x1) fb_dirty_x1 = x1;
+        if (y1 > fb_dirty_y1) fb_dirty_y1 = y1;
+    }
+}
+
+static inline uint32_t fb_index(uint16_t x, uint16_t y) {
+    return ((uint32_t)y * TFT_WIDTH + x) * 2;
 }
 
 void st7789_init(void) {
@@ -95,7 +137,20 @@ void st7789_init(void) {
     write_cmd(CMD_DISPON);
     sleep_ms(100);
 
-    st7789_set_rotation(1); // 1 = 90°, modo retrato; prueba 0-3 si no es el correcto en tu panel
+    // Retrato nativo (240 ancho x 320 alto): rotación 0, sin el bit
+    // de intercambio fila/columna de MADCTL. La rotación 1 (90°)
+    // usa ese intercambio, que en algunos módulos de este tipo
+    // provoca que el direccionamiento CASET/RASET no coincida con
+    // las columnas físicas reales del panel -- típico síntoma:
+    // contenido repetido/envuelto en varias franjas de la pantalla.
+    // Si con 0 la imagen sale al revés (patas arriba), prueba 2.
+    st7789_set_rotation(0);
+
+    // Arranca con el framebuffer y la pantalla física en negro, para
+    // que no se vea basura de la GRAM antes del primer dibujo real.
+    memset(framebuffer, 0, sizeof(framebuffer));
+    mark_dirty(0, 0, TFT_WIDTH - 1, TFT_HEIGHT - 1);
+    st7789_flush();
 }
 
 void st7789_set_window(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1) {
@@ -117,46 +172,84 @@ void st7789_set_window(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1) {
     write_cmd(CMD_RAMWR);
 }
 
+// ---------------------------------------------------------
+// Dibujo: TODO esto ahora escribe en el framebuffer (RAM pura,
+// sin SPI) y marca la zona tocada como sucia. Nada llega a la
+// pantalla física hasta el siguiente st7789_flush().
+// ---------------------------------------------------------
+
 void st7789_draw_pixel(uint16_t x, uint16_t y, uint16_t color) {
     if (x >= TFT_WIDTH || y >= TFT_HEIGHT) return;
-    st7789_set_window(x, y, x, y);
-    uint8_t buf[2] = { color >> 8, color & 0xFF };
-    write_data(buf, 2);
+    uint32_t idx = fb_index(x, y);
+    framebuffer[idx]     = color >> 8;
+    framebuffer[idx + 1] = color & 0xFF;
+    mark_dirty(x, y, x, y);
 }
 
 void st7789_fill_rect(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16_t color) {
     if (x >= TFT_WIDTH || y >= TFT_HEIGHT) return;
+    if (w == 0 || h == 0) return;
     if (x + w > TFT_WIDTH)  w = TFT_WIDTH - x;
     if (y + h > TFT_HEIGHT) h = TFT_HEIGHT - y;
 
-    st7789_set_window(x, y, x + w - 1, y + h - 1);
-
     uint8_t hi = color >> 8, lo = color & 0xFF;
-    uint8_t line[2 * 64]; // buffer chico para no usar demasiada RAM
-    for (int i = 0; i < 64; i++) {
-        line[2 * i] = hi;
-        line[2 * i + 1] = lo;
+
+    for (uint16_t row = 0; row < h; row++) {
+        uint32_t offset = fb_index(x, y + row);
+        for (uint16_t col = 0; col < w; col++) {
+            framebuffer[offset]     = hi;
+            framebuffer[offset + 1] = lo;
+            offset += 2;
+        }
     }
 
-    cs_select();
-    gpio_put(PIN_DC, 1);
-    uint32_t total_px = (uint32_t)w * h;
-    while (total_px > 0) {
-        uint32_t chunk = total_px > 64 ? 64 : total_px;
-        spi_write_blocking(TFT_SPI, line, chunk * 2);
-        total_px -= chunk;
-    }
-    cs_deselect();
+    mark_dirty(x, y, x + w - 1, y + h - 1);
 }
 
 void st7789_fill_screen(uint16_t color) {
+    // Caso rápido: negro y blanco tienen los dos bytes iguales
+    // (0x00/0x00 y 0xFF/0xFF), así que se pueden rellenar con
+    // memset en vez de un bucle píxel a píxel.
+    if (color == COLOR_BLACK || color == COLOR_WHITE) {
+        uint8_t b = (color == COLOR_BLACK) ? 0x00 : 0xFF;
+        memset(framebuffer, b, (size_t)TFT_WIDTH * TFT_HEIGHT * 2);
+        mark_dirty(0, 0, TFT_WIDTH - 1, TFT_HEIGHT - 1);
+        return;
+    }
     st7789_fill_rect(0, 0, TFT_WIDTH, TFT_HEIGHT, color);
 }
 
 // ---------------------------------------------------------
+// Flush: transmite SOLO el rectángulo sucio, en una única sesión
+// SPI. Se fija la ventana (CASET/RASET/RAMWR) una vez, y dentro
+// de esa ventana se envían los bytes de cada fila sucia seguidos;
+// el controlador ST7789 avanza solo de fila en fila dentro de la
+// ventana, así que no hace falta reabrir RASET por cada una.
+// ---------------------------------------------------------
+void st7789_flush(void) {
+    if (!fb_dirty) return;
+
+    uint16_t x0 = fb_dirty_x0, y0 = fb_dirty_y0;
+    uint16_t x1 = fb_dirty_x1, y1 = fb_dirty_y1;
+    uint16_t w = x1 - x0 + 1;
+
+    st7789_set_window(x0, y0, x1, y1);
+
+    cs_select();
+    gpio_put(PIN_DC, 1);
+    for (uint16_t row = y0; row <= y1; row++) {
+        uint32_t offset = fb_index(x0, row);
+        spi_write_blocking(TFT_SPI, &framebuffer[offset], (size_t)w * 2);
+    }
+    cs_deselect();
+
+    fb_dirty = false;
+}
+
+// ---------------------------------------------------------
 // Fuente bitmap 5x7. Cubre ' ' (0x20) hasta 'Z' (0x5A):
-// espacio, signos b\u00e1sicos, d\u00edgitos 0-9 y may\u00fasculas A-Z.
-// Cada car\u00e1cter son 7 bytes (uno por fila), usando los 5 bits
+// espacio, signos básicos, dígitos 0-9 y mayúsculas A-Z.
+// Cada carácter son 7 bytes (uno por fila), usando los 5 bits
 // bajos de cada byte para las 5 columnas (bit4 = columna
 // izquierda, bit0 = columna derecha).
 // ---------------------------------------------------------
@@ -254,6 +347,12 @@ uint16_t st7789_text_width(const char *str, uint8_t scale) {
     return (uint16_t)(len * (FONT_WIDTH + 1) * scale - scale); // sin espacio sobrante al final
 }
 
+// ---------------------------------------------------------
+// st7789_blit: escritura DIRECTA al panel, sin pasar por el
+// framebuffer ni por el rectángulo sucio. Se mantiene igual que
+// antes (para compatibilidad con quien ya la usaba así); ver aviso
+// en st7789.h sobre mezclarla con las funciones de dibujo de arriba.
+// ---------------------------------------------------------
 void st7789_blit(uint16_t x0, uint16_t y0, uint16_t w, uint16_t h, const uint16_t *buf) {
     st7789_set_window(x0, y0, x0 + w - 1, y0 + h - 1);
 
@@ -278,6 +377,25 @@ void st7789_blit(uint16_t x0, uint16_t y0, uint16_t w, uint16_t h, const uint16_
     }
 
     cs_deselect();
+}
+
+void st7789_blit_to_buffer(uint16_t x0, uint16_t y0, uint16_t w, uint16_t h, const uint16_t *buf) {
+    if (x0 >= TFT_WIDTH || y0 >= TFT_HEIGHT) return;
+    if (x0 + w > TFT_WIDTH)  w = TFT_WIDTH - x0;
+    if (y0 + h > TFT_HEIGHT) h = TFT_HEIGHT - y0;
+
+    for (uint16_t row = 0; row < h; row++) {
+        uint32_t offset = fb_index(x0, y0 + row);
+        const uint16_t *src_row = buf + (uint32_t)row * w;
+        for (uint16_t col = 0; col < w; col++) {
+            uint16_t c = src_row[col];
+            framebuffer[offset]     = c >> 8;
+            framebuffer[offset + 1] = c & 0xFF;
+            offset += 2;
+        }
+    }
+
+    mark_dirty(x0, y0, x0 + w - 1, y0 + h - 1);
 }
 
 void st7789_set_rotation(uint8_t rotation) {
