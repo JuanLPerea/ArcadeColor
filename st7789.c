@@ -137,14 +137,11 @@ void st7789_init(void) {
     write_cmd(CMD_DISPON);
     sleep_ms(100);
 
-    // Retrato nativo (240 ancho x 320 alto): rotación 0, sin el bit
-    // de intercambio fila/columna de MADCTL. La rotación 1 (90°)
-    // usa ese intercambio, que en algunos módulos de este tipo
-    // provoca que el direccionamiento CASET/RASET no coincida con
-    // las columnas físicas reales del panel -- típico síntoma:
-    // contenido repetido/envuelto en varias franjas de la pantalla.
-    // Si con 0 la imagen sale al revés (patas arriba), prueba 2.
-    st7789_set_rotation(0);
+    // Apaisada (320 ancho x 240 alto): rotación 1 (90°). Si la
+    // imagen sale espejada o con la orientación incorrecta, prueba
+    // rotación 3 (también 320x240, pero con el otro sentido de
+    // intercambio fila/columna).
+    st7789_set_rotation(1);
 
     // Arranca con el framebuffer y la pantalla física en negro, para
     // que no se vea basura de la GRAM antes del primer dibujo real.

@@ -44,6 +44,7 @@ add_executable(ArcadeColor
         records.c
         demo.c
         sound.c
+        highscores.c
         games/games_list.c
         games/pong.c
         games/space_invaders.c
@@ -73,7 +74,8 @@ pico_enable_stdio_usb(ArcadeColor 0)
 target_link_libraries(ArcadeColor
         pico_stdlib
         hardware_spi
-        hardware_pio)
+        hardware_pio
+        hardware_flash)
 
 # Add the standard include files to the build
 target_include_directories(ArcadeColor PRIVATE
