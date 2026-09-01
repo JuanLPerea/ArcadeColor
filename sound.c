@@ -34,9 +34,23 @@
 
 /*
  * Volumen máximo de cada canal.
+ *
+ * CANAL1/CANAL2 subidos tras corregir wave_triangle(): con el fallo
+ * de escala, la triangular saturaba casi de inmediato y sonaba en
+ * la práctica como una cuadrada a plena amplitud (más alta). Ya
+ * corregida, es una rampa lineal de verdad, con una amplitud media
+ * ~42% menor que una cuadrada del mismo pico (RMS triangular/RMS
+ * cuadrada = 1/√3 ≈ 0.577) -- así que con el MISMO volumen sonaba
+ * más floja que antes. Estos valores compensan esa diferencia.
+ *
+ * Es al gusto: súbelos más si los quieres más fuertes (el limitador
+ * de la mezcla ya protege contra desbordamiento, aunque a volúmenes
+ * muy altos con los 3 canales sonando a la vez notarás algo más de
+ * saturación/recorte -- en música chiptune de arcade normalmente no
+ * es un problema, hasta le da carácter).
  */
-#define CHANNEL1_VOLUME 75
-#define CHANNEL2_VOLUME 55
+#define CHANNEL1_VOLUME 110
+#define CHANNEL2_VOLUME 80
 #define CHANNEL3_VOLUME 100
 
 
@@ -231,6 +245,145 @@ static volatile uint music_index = 0;
 
 static absolute_time_t music_next_change;
 
+/*
+ * Sirena del platillo volante (Space Invaders y lo que la necesite):
+ * un silbido continuo de dos tonos que se alternan, típico del OVNI
+ * clásico. Usa el CANAL 2 -- libre durante la partida, ya que la
+ * música de menú (canales 1+2) se para en cuanto empieza a jugarse
+ * (sound_stop_menu_music()) -- así no interfiere con los efectos de
+ * disparo/explosión del canal 3, que siguen sonando encima sin
+ * cortar la sirena.
+ */
+static volatile bool channel2_siren_active = false;
+static uint8_t channel2_siren_phase = 0;
+static absolute_time_t channel2_siren_next_change;
+
+#define SIREN_FREQ_LOW   600
+#define SIREN_FREQ_HIGH  900
+#define SIREN_STEP_MS     90
+#define SIREN_VOLUME      40   // más bajo que los efectos, para que no los tape
+
+/*
+ * Expiración del tono genérico de sound_play_tone() (canal 3).
+ * Antes, duration_ms se ignoraba por completo y el tono se quedaba
+ * sonando indefinidamente. Se comprueba en sound_update(), que ya
+ * se llama periódicamente para avanzar la música.
+ */
+static volatile bool channel3_tone_has_expiry = false;
+static absolute_time_t channel3_tone_expiry;
+
+/*
+ * Declaraciones adelantadas: configure_channel() y disable_channel()
+ * se definen más abajo en este mismo archivo (junto al resto de la
+ * mezcla de audio), pero el secuenciador de aquí las necesita antes.
+ * Sin esto, el compilador las trata como declaradas implícitamente
+ * (con tipo de retorno "int" por defecto), y luego choca con la
+ * definición real más abajo -- error de "static declaration follows
+ * non-static declaration".
+ */
+static void configure_channel(volatile audio_channel_t *channel, uint16_t frequency, uint16_t volume, uint8_t waveform);
+static void disable_channel(volatile audio_channel_t *channel);
+
+/*
+ * Secuenciador simple de canal 3, para melodías cortas no
+ * bloqueantes (2-4 notas): "pierdes la bola" descendente, "victoria"
+ * ascendente. Igual que channel3_tone_has_expiry, se avanza desde
+ * sound_update(). También usado internamente por los sound_effect_*
+ * de una sola nota, como apagado automático -- antes NINGUNO de
+ * ellos paraba el canal 3 por su cuenta, así que en Pong el tono del
+ * último rebote se quedaba sonando sostenido hasta el siguiente, en
+ * vez de ser un "beep" corto. Con secuencia de 1 sola nota, es
+ * exactamente ese apagado automático.
+ */
+#define CHANNEL3_SEQ_MAX_NOTES 4
+
+typedef struct {
+    uint16_t freqs[CHANNEL3_SEQ_MAX_NOTES];
+    uint16_t durations_ms[CHANNEL3_SEQ_MAX_NOTES];
+    uint8_t  count;
+    uint8_t  index;
+    bool     active;
+    uint16_t volume;
+    uint8_t  waveform;
+    absolute_time_t next_change;
+} Channel3Sequence;
+
+static volatile Channel3Sequence channel3_seq = { .active = false };
+
+static void channel3_seq_start(
+    const uint16_t *freqs,
+    const uint16_t *durations_ms,
+    uint8_t count,
+    uint16_t volume,
+    uint8_t waveform
+)
+{
+    if (count > CHANNEL3_SEQ_MAX_NOTES) {
+        count = CHANNEL3_SEQ_MAX_NOTES;
+    }
+
+    for (uint8_t i = 0; i < count; i++) {
+        channel3_seq.freqs[i] = freqs[i];
+        channel3_seq.durations_ms[i] = durations_ms[i];
+    }
+
+    channel3_seq.count    = count;
+    channel3_seq.index    = 0;
+    channel3_seq.volume   = volume;
+    channel3_seq.waveform = waveform;
+    channel3_seq.active   = true;
+
+    // La secuencia y el temporizador de "un solo tono" comparten el
+    // canal 3 -- se excluyen mutuamente, solo uno de los dos manda
+    // en cada momento.
+    channel3_tone_has_expiry = false;
+
+    configure_channel(&channel3, channel3_seq.freqs[0], volume, waveform);
+    channel3_seq.next_change = make_timeout_time_ms(channel3_seq.durations_ms[0]);
+}
+
+static void channel3_seq_update(void)
+{
+    if (!channel3_seq.active) {
+        return;
+    }
+    if (!time_reached(channel3_seq.next_change)) {
+        return;
+    }
+
+    channel3_seq.index++;
+
+    if (channel3_seq.index >= channel3_seq.count) {
+        channel3_seq.active = false;
+        disable_channel(&channel3);
+        return;
+    }
+
+    configure_channel(
+        &channel3,
+        channel3_seq.freqs[channel3_seq.index],
+        channel3_seq.volume,
+        channel3_seq.waveform
+    );
+    channel3_seq.next_change =
+        make_timeout_time_ms(channel3_seq.durations_ms[channel3_seq.index]);
+}
+
+/* Efecto corto de una sola nota, con apagado automático -- usada por
+ * todos los sound_effect_* de una nota (shoot/explosion/select/move/
+ * game_over/success). Es channel3_seq_start() con una única nota. */
+static void channel3_play_short(
+    uint16_t freq,
+    uint16_t volume,
+    uint8_t waveform,
+    uint16_t duration_ms
+)
+{
+    uint16_t freqs[1]     = { freq };
+    uint16_t durations[1] = { duration_ms };
+    channel3_seq_start(freqs, durations, 1, volume, waveform);
+}
+
 
 /* ============================================================
  * UTILIDADES
@@ -269,6 +422,21 @@ static uint32_t frequency_to_phase_increment(
 
 /*
  * Configura un canal.
+ *
+ * CORREGIDO: protegida con save_and_disable_interrupts(), como ya
+ * hacían sound_start_menu_music()/sound_update(). Antes, si el timer
+ * de audio (que lee estos mismos campos ~22050 veces/segundo)
+ * interrumpía justo a mitad de esta función, podía leer una muestra
+ * con una mezcla de valores viejos/nuevos (p.ej. la forma de onda ya
+ * actualizada pero el phase_increment todavía el antiguo) -- un
+ * "clic" audible puntual al reconfigurar un canal que ya sonaba
+ * (típicamente al retriggerar un efecto). Con esto, cada llamada a
+ * configure_channel() (incluyendo todos los sound_effect_*, que
+ * antes no tenían ninguna protección) queda atómica frente al timer.
+ * Nota: save_and_disable_interrupts()/restore_interrupts() se
+ * pueden anidar sin problema, así que esto no rompe nada en
+ * sound_start_menu_music()/sound_update(), que ya envuelven sus
+ * propias llamadas a esta función en su propia protección.
  */
 static void configure_channel(
     volatile audio_channel_t *channel,
@@ -277,12 +445,16 @@ static void configure_channel(
     uint8_t waveform
 )
 {
+    uint32_t save =
+        save_and_disable_interrupts();
+
     if (frequency == 0) {
 
         channel->active = false;
         channel->frequency = 0;
         channel->phase_increment = 0;
 
+        restore_interrupts(save);
         return;
     }
 
@@ -308,6 +480,8 @@ static void configure_channel(
     }
 
     channel->active = true;
+
+    restore_interrupts(save);
 }
 
 
@@ -348,6 +522,14 @@ static int16_t wave_square(
 
 /*
  * Generador triangular.
+ *
+ * CORREGIDO: el factor de escala original (*4) hacía que el valor
+ * saliera del rango [-127,127] casi de inmediato (en los primeros
+ * ~16 valores de p de 32768 posibles), así que el clamp final
+ * saturaba la señal enseguida -- sonaba prácticamente como una
+ * cuadrada, no como una rampa suave. El factor correcto para una
+ * rampa lineal de verdad sobre todo el semiperiodo es 254/32768,
+ * no 4.
  */
 static int16_t wave_triangle(
     uint32_t phase
@@ -360,12 +542,12 @@ static int16_t wave_triangle(
 
     if (p < 32768) {
         value =
-            ((int32_t)p * 4) -
-            65536;
+            -127 +
+            (((int32_t)p * 254) / 32768);
     } else {
         value =
-            196608 -
-            ((int32_t)p * 4);
+            127 -
+            ((((int32_t)p - 32768) * 254) / 32768);
     }
 
     if (value > 127) {
@@ -696,11 +878,20 @@ void sound_play_tone(
         sound_init();
     }
 
-
     /*
-     * En lugar de bloquear durante duration_ms,
-     * utilizamos el canal 3.
+     * CORREGIDO: antes duration_ms se ignoraba por completo (el
+     * tono sonaba indefinidamente) y había una llamada duplicada a
+     * configure_channel() que no hacía nada distinto de la primera.
+     * Ahora se guarda cuándo debe apagarse y sound_update() lo
+     * comprueba en cada vuelta.
+     *
+     * También cancela cualquier secuencia de canal3_seq que
+     * estuviera sonando -- comparten el canal 3, así que si no se
+     * cancela, el siguiente sound_update() podría pisar este tono
+     * con la nota que tocara de la secuencia.
      */
+    channel3_seq.active = false;
+
     configure_channel(
         &channel3,
         frequency_hz,
@@ -708,25 +899,12 @@ void sound_play_tone(
         WAVE_SQUARE
     );
 
-
-    /*
-     * Para un tono genérico necesitamos saber cuándo
-     * terminarlo.
-     *
-     * El sistema actual de efectos se encarga de
-     * las duraciones específicas.
-     *
-     * Este tono simple utiliza un efecto de selección
-     * temporalmente.
-     */
-    if (duration_ms < 80) {
-
-        configure_channel(
-            &channel3,
-            frequency_hz,
-            CHANNEL3_VOLUME,
-            WAVE_SQUARE
-        );
+    if (duration_ms > 0) {
+        channel3_tone_has_expiry = true;
+        channel3_tone_expiry =
+            make_timeout_time_ms(duration_ms);
+    } else {
+        channel3_tone_has_expiry = false;
     }
 }
 
@@ -749,6 +927,10 @@ void sound_start_menu_music(void)
     music_index = 0;
 
     menu_music_playing = true;
+
+    // La sirena del platillo también usa el canal 2 -- si por lo que
+    // sea estuviera sonando, la música de menú manda.
+    channel2_siren_active = false;
 
 
     configure_channel(
@@ -801,6 +983,37 @@ void sound_stop_menu_music(void)
  */
 void sound_update(void)
 {
+    /*
+     * Auto-apagado del tono genérico de sound_play_tone() (ver
+     * comentario junto a channel3_tone_has_expiry más arriba).
+     */
+    if (
+        channel3_tone_has_expiry &&
+        time_reached(channel3_tone_expiry)
+    ) {
+        channel3_tone_has_expiry = false;
+        disable_channel(&channel3);
+    }
+
+    // Avanza la melodía corta de canal 3 (efectos de una nota con
+    // apagado automático, o las secuencias de 2-4 notas).
+    channel3_seq_update();
+
+    // Avanza el silbido de la sirena del platillo (canal 2).
+    if (
+        channel2_siren_active &&
+        time_reached(channel2_siren_next_change)
+    ) {
+        channel2_siren_phase ^= 1;
+        configure_channel(
+            &channel2,
+            channel2_siren_phase ? SIREN_FREQ_HIGH : SIREN_FREQ_LOW,
+            SIREN_VOLUME,
+            WAVE_TRIANGLE
+        );
+        channel2_siren_next_change = make_timeout_time_ms(SIREN_STEP_MS);
+    }
+
     if (!menu_music_playing) {
         return;
     }
@@ -875,32 +1088,29 @@ bool sound_menu_music_is_playing(void)
 
 
 /*
- * Disparo:
+ * Disparo: beep corto y agudo.
  *
- * frecuencia alta -> baja rápidamente
- *
- * Para simplificar y mantener el efecto no bloqueante,
- * utilizamos el canal 3 y su frecuencia inicial.
+ * CORREGIDO: antes se dejaba sonando indefinidamente (ningún
+ * sound_effect_* tenía apagado automático -- ver el comentario largo
+ * junto a channel3_seq arriba). Ahora dura CHANNEL3_SFX_MS y se para
+ * sola.
  */
+#define CHANNEL3_SFX_MS 55   // duración de los efectos cortos de una nota
+
 void sound_effect_shoot(void)
 {
     if (!sound_initialized) {
         sound_init();
     }
 
-    configure_channel(
-        &channel3,
-        1100,
-        CHANNEL3_VOLUME,
-        WAVE_SQUARE
-    );
+    channel3_play_short(1100, CHANNEL3_VOLUME, WAVE_SQUARE, CHANNEL3_SFX_MS);
 }
 
 
 /*
- * Explosión.
+ * Explosión: ráfaga corta de ruido blanco.
  *
- * Ruido blanco pseudoaleatorio.
+ * CORREGIDO: mismo apagado automático.
  */
 void sound_effect_explosion(void)
 {
@@ -908,17 +1118,14 @@ void sound_effect_explosion(void)
         sound_init();
     }
 
-    configure_channel(
-        &channel3,
-        100,
-        CHANNEL3_VOLUME,
-        WAVE_NOISE
-    );
+    channel3_play_short(100, CHANNEL3_VOLUME, WAVE_NOISE, 150);
 }
 
 
 /*
  * Selección del menú.
+ *
+ * CORREGIDO: mismo apagado automático.
  */
 void sound_effect_select(void)
 {
@@ -926,17 +1133,16 @@ void sound_effect_select(void)
         sound_init();
     }
 
-    configure_channel(
-        &channel3,
-        880,
-        CHANNEL3_VOLUME,
-        WAVE_SQUARE
-    );
+    channel3_play_short(880, CHANNEL3_VOLUME, WAVE_SQUARE, CHANNEL3_SFX_MS);
 }
 
 
 /*
- * Movimiento del selector.
+ * Movimiento del selector / rebote en pared.
+ *
+ * CORREGIDO: mismo apagado automático. Tono más grave que
+ * sound_effect_shoot(), para que se distingan sin mirar la pantalla
+ * (p.ej. rebote en pared vs. rebote en pala en Pong).
  */
 void sound_effect_move(void)
 {
@@ -944,17 +1150,17 @@ void sound_effect_move(void)
         sound_init();
     }
 
-    configure_channel(
-        &channel3,
-        660,
-        CHANNEL3_VOLUME,
-        WAVE_SQUARE
-    );
+    channel3_play_short(660, CHANNEL3_VOLUME, WAVE_SQUARE, CHANNEL3_SFX_MS);
 }
 
 
 /*
- * Game over.
+ * Game over: un solo tono grave y algo más largo -- distinto de
+ * sound_effect_lose_point() (que es la secuencia descendente de
+ * "has perdido la bola/punto", más corta y repetible muchas veces
+ * por partida).
+ *
+ * CORREGIDO: mismo apagado automático.
  */
 void sound_effect_game_over(void)
 {
@@ -962,17 +1168,16 @@ void sound_effect_game_over(void)
         sound_init();
     }
 
-    configure_channel(
-        &channel3,
-        180,
-        CHANNEL3_VOLUME,
-        WAVE_SAW
-    );
+    channel3_play_short(180, CHANNEL3_VOLUME, WAVE_SAW, 400);
 }
 
 
 /*
- * Victoria.
+ * Éxito puntual (p.ej. subida de nivel) -- una sola nota alegre,
+ * corta. Para una victoria de partida completa usa
+ * sound_effect_victory() en su lugar (secuencia de 3 notas).
+ *
+ * CORREGIDO: mismo apagado automático.
  */
 void sound_effect_success(void)
 {
@@ -980,12 +1185,43 @@ void sound_effect_success(void)
         sound_init();
     }
 
-    configure_channel(
-        &channel3,
-        1047,
-        CHANNEL3_VOLUME,
-        WAVE_TRIANGLE
-    );
+    channel3_play_short(1047, CHANNEL3_VOLUME, WAVE_TRIANGLE, 150);
+}
+
+
+/*
+ * Pierdes la bola / el punto: 4 notas descendentes, cortas.
+ * Nuevo efecto -- no existía en el sistema original.
+ */
+void sound_effect_lose_point(void)
+{
+    if (!sound_initialized) {
+        sound_init();
+    }
+
+    static const uint16_t freqs[4]     = { 392, 330, 262, 196 }; // sol-mi-do-sol descendente
+    static const uint16_t durations[4] = {  70,  70,  70, 140 };
+
+    channel3_seq_start(freqs, durations, 4, CHANNEL3_VOLUME, WAVE_SQUARE);
+}
+
+
+/*
+ * Victoria de partida: fanfarria corta de 3 notas ascendentes.
+ * Nuevo efecto -- no existía en el sistema original. Distinto de
+ * sound_effect_success() (una sola nota, para eventos menores como
+ * subir de nivel).
+ */
+void sound_effect_victory(void)
+{
+    if (!sound_initialized) {
+        sound_init();
+    }
+
+    static const uint16_t freqs[3]     = { 523, 659, 784 }; // do-mi-sol ascendente
+    static const uint16_t durations[3] = { 110, 110, 260 };
+
+    channel3_seq_start(freqs, durations, 3, CHANNEL3_VOLUME, WAVE_SQUARE);
 }
 
 
@@ -996,8 +1232,46 @@ void sound_effect_success(void)
  */
 void sound_effect_stop(void)
 {
+    channel3_seq.active = false;
+    channel3_tone_has_expiry = false;
+
     disable_channel(
         &channel3
+    );
+}
+
+
+/*
+ * Sirena del platillo volante: silbido continuo de dos tonos
+ * alternando (canal 2), hasta llamar a sound_siren_stop(). Pensada
+ * para arrancar cuando el platillo aparece en pantalla y pararla
+ * cuando se destruye o sale de pantalla.
+ */
+void sound_siren_start(void)
+{
+    if (!sound_initialized) {
+        sound_init();
+    }
+
+    channel2_siren_active = true;
+    channel2_siren_phase  = 0;
+
+    configure_channel(
+        &channel2,
+        SIREN_FREQ_LOW,
+        SIREN_VOLUME,
+        WAVE_TRIANGLE
+    );
+
+    channel2_siren_next_change = make_timeout_time_ms(SIREN_STEP_MS);
+}
+
+void sound_siren_stop(void)
+{
+    channel2_siren_active = false;
+
+    disable_channel(
+        &channel2
     );
 }
 

@@ -65,8 +65,8 @@
 
 // Cada pala en un color distinto, para diferenciarlas de un vistazo
 // (sobre todo en 2 jugadores). La bola se queda en blanco.
-#define COLOR_P1 COLOR_CYAN
-#define COLOR_P2 COLOR_YELLOW
+#define COLOR_P1 COLOR_RED
+#define COLOR_P2 COLOR_BLUE
 
 // Tamaño de pala del jugador según su nivel (se reduce cada 15 puntos).
 // Mismas proporciones que ArcadePi (72/56/44/34 sobre un campo de 400px
@@ -562,7 +562,7 @@ static void draw_over_screen(void) {
     if (two_p)
         msg = p1.score >= SCORE_WIN ? "JUGADOR 1 GANA" : "JUGADOR 2 GANA";
     else
-        msg = "FIN";
+        msg = (p1.score >= SCORE_WIN) ? "GANASTE" : "PERDISTE";
     renderer_draw_text(centered_x(msg, 2), CY-30, msg, COLOR_YELLOW, COLOR_BLACK, 2);
 
     char sc[20];
@@ -652,12 +652,12 @@ static void pong_tick(void) {
 
         if (ball.x + BALL_SZ < PLAY_X) {
             p2.score++;
-            sound_effect_explosion(); // se pierde la bola por la izquierda
+            sound_effect_lose_point(); // se pierde la bola por la izquierda
             if (!two_p && !demo) ai_profile_update(false);
             serve_side = 1; pause_cnt = 0; state = S_PAUSE;
         } else if (ball.x > PLAY_X + PLAY_W) {
             p1.score++;
-            sound_effect_explosion(); // se pierde la bola por la derecha
+            sound_effect_lose_point(); // se pierde la bola por la derecha
             if (!two_p && !demo) ai_profile_update(true);
             serve_side = 0; pause_cnt = 0; state = S_PAUSE;
         }
@@ -679,13 +679,17 @@ static void pong_tick(void) {
                     sound_effect_success(); // subida de nivel
                 }
             }
-            if (( two_p && (p1.score >= SCORE_WIN  || p2.score >= SCORE_WIN)) ||
-                (!two_p && p2.score >= SCORE_AI_WIN)) {
+            // En 1P, antes esto solo comprobaba si ganaba la IA -- no
+            // había forma de que el jugador ganara la partida. Ahora
+            // también termina si el jugador llega a SCORE_WIN.
+            if (( two_p && (p1.score >= SCORE_WIN || p2.score >= SCORE_WIN)) ||
+                (!two_p && (p1.score >= SCORE_WIN || p2.score >= SCORE_AI_WIN))) {
                 sound_stop_menu_music(); // por si acaso siguiera sonando
-                if (two_p) {
-                    sound_effect_success();  // alguien ha ganado la partida
+                bool player_won = two_p || (p1.score >= SCORE_WIN);
+                if (player_won) {
+                    sound_effect_victory();  // fanfarria de 3 notas
                 } else {
-                    sound_effect_game_over(); // en 1P solo se llega aquí si gana la IA
+                    sound_effect_game_over(); // gana la IA
                 }
                 if (!demo && !two_p && highscores_is_top(PONG_GAME_ID, p1.score)) {
                     highscores_enter(PONG_GAME_ID, (uint32_t)p1.score); // bloqueante

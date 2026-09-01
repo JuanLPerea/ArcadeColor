@@ -53,7 +53,10 @@ void sound_effect_select(void);
 void sound_effect_move(void);
 void sound_effect_game_over(void);
 void sound_effect_success(void);
-
+void sound_effect_lose_point(void);
+void sound_effect_victory(void);
+void sound_siren_start(void);
+void sound_siren_stop(void);
 
 /*
  * Control del canal de efectos.

@@ -1,6 +1,7 @@
 #include "highscores.h"
 #include "renderer.h"
 #include "controls.h"
+#include "sound.h"
 #include "pico/stdlib.h"
 #include "hardware/flash.h"
 #include "hardware/sync.h"
@@ -191,6 +192,10 @@ void highscores_enter(int game_id, uint32_t score) {
         renderer_flush();
 
         controls_update();
+        sound_update(); // sin esto, cualquier sonido con apagado automático
+                         // pendiente (p.ej. el tono de "game over") nunca
+                         // llega a comprobarse mientras se escriben las
+                         // iniciales, y se queda sonando indefinidamente
         if (controls_menu_up())   letter_idx[cursor]++;
         if (controls_menu_down()) letter_idx[cursor]--;
         if (controls_menu_select()) cursor++;
