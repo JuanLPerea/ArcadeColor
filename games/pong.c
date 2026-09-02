@@ -91,6 +91,8 @@
 #define BALL_SPEED_MAX   6.0f
 #define BALL_MAX_ANGLE   1.0f   // radianes (~57°), ángulo máximo en rebote de pala
 #define BALL_SERVE_ANGLE 0.35f  // radianes (~20°), ángulo máximo al sacar (más plano)
+#define BALL_DEMO_MIN_ANGLE  0.30f   // ~17°
+#define BALL_DEMO_MAX_ANGLE  0.75f   // ~43°
 
 #define SCORE_WIN     15   // 2P: primero en llegar gana
 #define SCORE_AI_WIN  15   // 1P: la IA gana cuando llega a 15
@@ -116,15 +118,15 @@
 // IA Adaptativa -- idéntico a ArcadePi, no depende de resolución ni de
 // la fuente de input, así que se porta literal.
 // ---------------------------------------------------------------------------
-static const int AI_BASE_SPEED[4]  = { 4, 5, 6, 7 };
+static const int AI_BASE_SPEED[4]  = { 1, 2, 3, 5 };
 #define AI_SPEED_CAP 11
 static const int AI_BASE_VISION[4] = {
+    PLAY_X + PLAY_W*4/5,
     PLAY_X + PLAY_W*3/5,
     PLAY_X + PLAY_W*2/5,
-    PLAY_X + PLAY_W*1/5,
     0,
 };
-static const int AI_BASE_ERROR[4] = { 18, 12, 7, 3 };
+static const int AI_BASE_ERROR[4] = { 32, 24, 18, 10 };
 
 typedef struct {
     int  avg_center_y;
@@ -356,9 +358,27 @@ static void set_ball_velocity(float speed, float angle_rad, int dir) {
 
 static void ball_launch(void) {
     ball_speed = BALL_BASE_SPEED;
-    // rand() en [0,1) * 2 - 1 -> [-1,1), escalado al ángulo máximo de saque
-    float r = (float)(rand() % 1000) / 1000.0f;
-    float angle = (r * 2.0f - 1.0f) * BALL_SERVE_ANGLE;
+
+    float angle;
+
+    if (demo) {
+        // En demo: ángulo siempre inclinado y aleatorio.
+        // Primero elegimos una magnitud entre MIN y MAX.
+        float r = (float)(rand() % 1000) / 1000.0f;
+        float magnitude = BALL_DEMO_MIN_ANGLE +
+                          r * (BALL_DEMO_MAX_ANGLE - BALL_DEMO_MIN_ANGLE);
+
+        // 50% hacia arriba, 50% hacia abajo.
+        if (rand() & 1)
+            angle = magnitude;
+        else
+            angle = -magnitude;
+    } else {
+        // Partida normal: conserva el saque relativamente plano.
+        float r = (float)(rand() % 1000) / 1000.0f;
+        angle = (r * 2.0f - 1.0f) * BALL_SERVE_ANGLE;
+    }
+
     int dir = (serve_side == 0) ? 1 : -1;
     set_ball_velocity(ball_speed, angle, dir);
 }
