@@ -314,6 +314,16 @@ static uint32_t rng_next(void) {
 static int clamp(int v, int lo, int hi) { return v<lo?lo:v>hi?hi:v; }
 static int iabs_brk(int v) { return v<0?-v:v; }
 
+// Rastro de render incremental -- declarado aquí arriba (no junto a
+// las funciones de dibujo que lo usan) para que serve_reset() y
+// draw_field_static() puedan resetearlo sin problemas de orden.
+static int  prev_ball_x=-1, prev_ball_y=-1;
+static int  prev_pad_x=-1, prev_pad_w=-1;
+static int  prev_bullet_x[MAX_BULLETS], prev_bullet_y[MAX_BULLETS];
+static bool prev_bullet_active[MAX_BULLETS];
+static int  prev_pu_x[MAX_POWERUPS], prev_pu_y[MAX_POWERUPS];
+static bool prev_pu_active[MAX_POWERUPS];
+
 // ---------------------------------------------------------------------------
 // Helpers de estado
 // ---------------------------------------------------------------------------
@@ -405,6 +415,14 @@ static void serve_reset(void) {
     ball_magnet = false;
     snd_cooldown = 0;
     bullets_clear();
+
+    // Fuerza que la bola y la pala se redibujen de verdad en la
+    // siguiente pasada, aunque su posición coincida por casualidad
+    // con la última dibujada -- así aparecen siempre, tanto al
+    // empezar nivel como al perder una vida, sin depender de que el
+    // jugador mueva el encoder primero.
+    prev_ball_x = -1;
+    prev_pad_x  = -1;
 }
 
 static bool field_needs_redraw = true;
@@ -461,18 +479,6 @@ static void erase_brick(int r, int c) {
     renderer_flush();
 }
 
-static void draw_field_static(void) {
-    renderer_clear(COLOR_BLACK);
-    renderer_fill_rect(PLAY_X, PLAY_Y,          PLAY_W, 1, COLOR_WHITE);
-    renderer_fill_rect(PLAY_X, PLAY_Y+PLAY_H-1, PLAY_W, 1, COLOR_WHITE);
-    draw_bricks_full();
-    field_needs_redraw = false;
-    renderer_flush();
-}
-
-static int prev_ball_x=-1, prev_ball_y=-1;
-static int prev_pad_x=-1, prev_pad_w=-1;
-
 static void draw_ball_if_moved(void) {
     if (ball_x == prev_ball_x && ball_y == prev_ball_y) return;
     if (prev_ball_x >= 0) renderer_fill_rect(prev_ball_x, prev_ball_y, BALL_SZ, BALL_SZ, COLOR_BLACK);
@@ -492,10 +498,31 @@ static void draw_paddle_if_moved(void) {
     renderer_flush();
 }
 
-static int  prev_bullet_x[MAX_BULLETS], prev_bullet_y[MAX_BULLETS];
-static bool prev_bullet_active[MAX_BULLETS];
-static int  prev_pu_x[MAX_POWERUPS], prev_pu_y[MAX_POWERUPS];
-static bool prev_pu_active[MAX_POWERUPS];
+/*
+ * CORREGIDO: antes esta función no reseteaba el rastro de bola/
+ * pala/balas/power-ups tras el renderer_clear(). Como la pantalla se
+ * borra pero prev_pad_x/prev_ball_x seguían con el valor de ANTES
+ * del borrado, draw_paddle_if_moved() y draw_ball_if_moved() creían
+ * que "no había cambiado nada" y no redibujaban -- la pala/bola solo
+ * volvían a aparecer en cuanto el jugador movía el encoder (lo que
+ * dispara un valor de pad_x distinto de verdad). Pasaba tanto al
+ * empezar partida como al perder una vida si esta función llegaba a
+ * ejecutarse en ese momento.
+ */
+static void draw_field_static(void) {
+    renderer_clear(COLOR_BLACK);
+    renderer_fill_rect(PLAY_X, PLAY_Y,          PLAY_W, 1, COLOR_WHITE);
+    renderer_fill_rect(PLAY_X, PLAY_Y+PLAY_H-1, PLAY_W, 1, COLOR_WHITE);
+    draw_bricks_full();
+
+    prev_ball_x = prev_ball_y = -1;
+    prev_pad_x = prev_pad_w = -1;
+    for (int i = 0; i < MAX_BULLETS; i++) prev_bullet_active[i] = false;
+    for (int i = 0; i < MAX_POWERUPS; i++) prev_pu_active[i] = false;
+
+    field_needs_redraw = false;
+    renderer_flush();
+}
 
 static void draw_bullets_if_moved(void) {
     bool any=false;
