@@ -16,7 +16,7 @@
 #define PIN_BTN_J1_A 0
 #define PIN_BTN_J1_B 1
 #define PIN_BTN_J2_A 2
-#define PIN_BTN_J2_B 3
+#define PIN_BTN_J2_B 13
 
 /*
  * Identificadores de botón para controls_button_pressed()/down().
