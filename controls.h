@@ -7,11 +7,11 @@
 /* Pines */
 #define PIN_ENC1_CLK 6
 #define PIN_ENC1_DT  7
-#define PIN_ENC1_SW  16
+#define PIN_ENC1_SW  8
 
-#define PIN_ENC2_CLK 26
-#define PIN_ENC2_DT  27
-#define PIN_ENC2_SW  22
+#define PIN_ENC2_CLK 10
+#define PIN_ENC2_DT  11
+#define PIN_ENC2_SW  12
 
 #define PIN_BTN_J1_A 0
 #define PIN_BTN_J1_B 1
@@ -27,8 +27,8 @@
 #define BTN_J1_B    1
 #define BTN_J2_A    2
 #define BTN_J2_B    3
-#define BTN_ENC1_SW 4
-#define BTN_ENC2_SW 5
+//#define BTN_ENC1_SW 4
+//#define BTN_ENC2_SW 5
 
 void controls_init(void);
 

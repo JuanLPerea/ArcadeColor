@@ -830,7 +830,7 @@ static void scr_tick(void) {
             int d = controls_get_raw_delta(0);
             ship_vel = enc_momentum(d, &ship_vel);
             ship_y = clamp(ship_y+ship_vel, SHIP_Y_MIN, SHIP_Y_MAX);
-            update_ship_thrust(controls_button_down(BTN_ENC1_SW));
+            update_ship_thrust(controls_button_down(PIN_ENC1_SW));
             if (controls_button_pressed(BTN_J1_A)) try_shoot();
             if (controls_button_pressed(BTN_J1_B)) try_bomb();
         } else {
