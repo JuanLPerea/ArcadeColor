@@ -1150,8 +1150,8 @@ static void as_tick(void) {
             if (num_players==2) {
                 int d1 = controls_get_raw_delta(1);
                 if (update_ship(1, d1,
-                            controls_button_down(PIN_BTN_J1_B),
-                            controls_button_down(PIN_BTN_J1_A),
+                            controls_button_down(PIN_BTN_J2_B),
+                            controls_button_down(PIN_BTN_J2_A),
                             controls_button_pressed(PIN_ENC2_SW))) hyper_died = true;
             }
         }

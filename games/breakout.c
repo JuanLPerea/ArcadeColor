@@ -93,7 +93,8 @@ static int enc_momentum(int enc_raw, int *vel) {
     return *vel;
 }
 
-#define WARP_GAP_Y   (PLAY_Y + PLAY_H/2 - 20)
+#define WARP_GAP_H   40
+#define WARP_GAP_Y   (PAD_Y - (WARP_GAP_H - PAD_H)/2)
 
 // ---------------------------------------------------------------------------
 // Bola -- reescalada (mismo esquema de subpíxel /64 que el original,
@@ -129,8 +130,8 @@ static int enc_momentum(int enc_raw, int *vel) {
 
 #define PU_COUNT      5
 #define MAX_POWERUPS  4
-#define PU_W         16
-#define PU_H         10
+#define PU_W         22
+#define PU_H         14
 #define PU_SPEED      1
 
 #define PU_DURATION    (TICKS_S * 15)
@@ -302,6 +303,7 @@ static int     active_pu_timer;
 static Bullet  bullets[MAX_BULLETS];
 static int     shoot_cooldown;
 static bool    warp_spawned;
+static int     warp_side; // 0 = hueco a la izquierda, 1 = a la derecha
 
 static uint32_t rng_state_v = 12345;
 static uint32_t rng_next(void) {
@@ -354,11 +356,25 @@ static void bullets_clear(void) {
 
 static void deactivate_powerup(void) {
     if (active_pu == PU_WIDE) pad_w = clamp(PAD_W_BASE - (level-1)*PAD_W_SHRINK, PAD_W_MIN, PAD_W_BASE);
-    if (active_pu == PU_MAGNET) ball_magnet = false;
+    if (active_pu == PU_MAGNET) {
+        ball_magnet = false;
+        // Si la bola seguía pegada a la pala por el imán, hay que
+        // soltarla aquí: si no, se queda congelada (vx=vy=0) y ya
+        // no responde a los botones, porque el lanzamiento manual
+        // solo comprobaba ball_magnet, que aquí ya se ha puesto a
+        // false (por timeout o por cogerse otro power-up distinto).
+        if (ball_held) {
+            ball_held = false;
+            ball_bx = ball_spd*((pad_x&1)?1:-1)/2;
+            ball_by = -ball_spd;
+        }
+    }
     if (active_pu == PU_WARP) {
-        // Restaura el borde normal donde estaba el hueco
-        renderer_fill_rect(PLAY_X, WARP_GAP_Y, 2, 40, COLOR_WHITE);
-        renderer_fill_rect(PLAY_X+PLAY_W-2, WARP_GAP_Y, 2, 40, COLOR_WHITE);
+        // Borra el hueco (antes se "restauraba" con COLOR_WHITE como
+        // si hubiera una pared lateral, pero esas paredes nunca se
+        // dibujan -> quedaban marcas blancas fantasma en el borde).
+        int wx = warp_side ? PLAY_X+PLAY_W-3 : PLAY_X;
+        renderer_fill_rect(wx, WARP_GAP_Y, 3, WARP_GAP_H, COLOR_BLACK);
         renderer_flush();
     }
     active_pu = PU_NONE;
@@ -372,12 +388,14 @@ static void activate_powerup(uint8_t type) {
     switch (type) {
         case PU_WIDE:   pad_w = PAD_W_WIDE; break;
         case PU_MAGNET: ball_magnet = false; break; // se activa al TOCAR la pala, no antes
-        case PU_WARP:
-            // Marca el hueco en ambos laterales
-            renderer_fill_rect(PLAY_X, WARP_GAP_Y, 2, 40, COLOR_CYAN);
-            renderer_fill_rect(PLAY_X+PLAY_W-2, WARP_GAP_Y, 2, 40, COLOR_CYAN);
+        case PU_WARP: {
+            // Hueco a un solo lado, a la altura de la pala
+            warp_side = rng_next() & 1;
+            int wx = warp_side ? PLAY_X+PLAY_W-3 : PLAY_X;
+            renderer_fill_rect(wx, WARP_GAP_Y, 3, WARP_GAP_H, COLOR_CYAN);
             renderer_flush();
             break;
+        }
         case PU_LIFE:
             lives++;
             active_pu = PU_NONE;
@@ -545,7 +563,7 @@ static void draw_powerups_if_moved(void) {
         if (prev_pu_active[i]) renderer_fill_rect(prev_pu_x[i], prev_pu_y[i], PU_W, PU_H, COLOR_BLACK);
         if (show) {
             renderer_fill_rect(powerups[i].x, powerups[i].y, PU_W, PU_H, COLOR_BLUE);
-            renderer_draw_text(powerups[i].x+4, powerups[i].y+1, pu_labels[powerups[i].type], COLOR_WHITE, COLOR_BLUE, 1);
+            renderer_draw_text(powerups[i].x+PU_W/2-3, powerups[i].y+PU_H/2-4, pu_labels[powerups[i].type], COLOR_WHITE, COLOR_BLUE, 1);
         }
         prev_pu_x[i]=powerups[i].x; prev_pu_y[i]=powerups[i].y; prev_pu_active[i]=show;
         any=true;
@@ -727,20 +745,11 @@ static void update_ball(void) {
     while (ball_fy >= 64) { ball_y++; ball_fy -= 64; }
     while (ball_fy <= -64){ ball_y--; ball_fy += 64; }
 
-    bool in_warp_band = ball_y+BALL_SZ/2 > WARP_GAP_Y && ball_y+BALL_SZ/2 < WARP_GAP_Y+40;
     if (ball_x <= PLAY_X) {
-        if (warp_active() && in_warp_band) {
-            ball_x = PLAY_X+PLAY_W-BALL_SZ-1;
-        } else {
-            ball_x = PLAY_X; ball_bx = iabs_brk(ball_bx); sound_effect_move();
-        }
+        ball_x = PLAY_X; ball_bx = iabs_brk(ball_bx); sound_effect_move();
     }
     if (ball_x + BALL_SZ >= PLAY_X+PLAY_W) {
-        if (warp_active() && in_warp_band) {
-            ball_x = PLAY_X+1;
-        } else {
-            ball_x = PLAY_X+PLAY_W-BALL_SZ; ball_bx = -iabs_brk(ball_bx); sound_effect_move();
-        }
+        ball_x = PLAY_X+PLAY_W-BALL_SZ; ball_bx = -iabs_brk(ball_bx); sound_effect_move();
     }
     if (ball_y <= PLAY_Y) { ball_y = PLAY_Y; ball_by = iabs_brk(ball_by); sound_effect_move(); }
 
@@ -869,6 +878,13 @@ static void brk_tick(void) {
             if (controls_menu_select()) {
                 if (ball_magnet) { ball_magnet=false; ball_held=false; ball_bx=ball_spd*((pad_x&1)?1:-1)/2; ball_by=-ball_spd; }
                 else try_shoot();
+            }
+            // La pala ha llegado al lado donde el warp abrió su
+            // escapatoria: se pasa de nivel directamente.
+            if (warp_active() &&
+                ((warp_side==0 && pad_x <= PLAY_X) ||
+                 (warp_side==1 && pad_x+pad_w >= PLAY_X+PLAY_W))) {
+                bricks_left = 0;
             }
         } else {
             demo_ai();
