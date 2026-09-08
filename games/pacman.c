@@ -53,9 +53,16 @@
  *     reglas de 1/2 jugadores se han portado tal cual desde el original.
  *
  * CONTROLES:
- *   J1: encoder 1 = izquierda/derecha · BTN_J1_A = arriba · BTN_J1_B = abajo
- *   J2: encoder 2 = izquierda/derecha · BTN_J2_A = arriba · BTN_J2_B = abajo
+ *   J1: encoder 1 = arriba/abajo · BTN_J1_A = izquierda · BTN_J1_B = derecha
+ *   J2: encoder 2 = arriba/abajo · BTN_J2_A = izquierda · BTN_J2_B = derecha
  *   Mantener pulsados ambos SW de encoder = salir al menú
+ *
+ *  7) SPRITES GIRADOS. Los sprites de Pac-Man/fantasmas (boca y mirada)
+ *     se dibujan con la orientación real de movimiento girada 90° en el
+ *     sentido de las agujas del reloj -- ver rotate_cw() más abajo, que
+ *     se aplica dentro de draw_pac_sprite()/draw_ghost_eyes() para que
+ *     todos los sitios donde se dibujan (juego, HUD de vidas, pantalla
+ *     de selección) queden girados igual, sin tocar cada llamada.
  */
 
 #include <stdlib.h>
@@ -845,11 +852,28 @@ static void fill_circle(int cx, int cy, int r, uint16_t color) {
     }
 }
 
-// Pac-Man: círculo con cuña de boca abierta hacia 'dir'. frame: 0=abierta
-// del todo, 1=medio abierta, 2=cerrada (círculo completo).
+// Gira una dirección 90° en el sentido de las agujas del reloj, SOLO
+// para la orientación visual del sprite (boca de Pac-Man, mirada de los
+// fantasmas) -- la dirección real de movimiento (Dir/DX/DY que usa la
+// física, el mapa y la IA) no se toca, se sigue moviendo en línea recta
+// hacia donde el jugador manda. Ver nota 7) en la cabecera del archivo.
+static Dir rotate_cw(Dir d) {
+    switch (d) {
+    case DIR_UP:    return DIR_RIGHT;
+    case DIR_RIGHT: return DIR_DOWN;
+    case DIR_DOWN:  return DIR_LEFT;
+    case DIR_LEFT:  return DIR_UP;
+    default:        return d;
+    }
+}
+
+// Pac-Man: círculo con cuña de boca abierta hacia 'dir' (girada 90° CW,
+// ver rotate_cw()). frame: 0=abierta del todo, 1=medio abierta,
+// 2=cerrada (círculo completo).
 static void draw_pac_sprite(int cx, int cy, Dir dir, int frame, uint16_t color) {
     int r = CELL/2 - 1; if (r < 3) r = 3;
     if (dir == DIR_NONE) dir = DIR_RIGHT;
+    dir = rotate_cw(dir);
     int8_t ddx = DX[dir], ddy = DY[dir];
 
     for (int dy = -r; dy <= r; dy++) {
@@ -895,6 +919,7 @@ static void draw_ghost_body(int cx, int cy, uint16_t body_color) {
 }
 
 static void draw_ghost_eyes(int cx, int cy, Dir dir, uint16_t pupil_color) {
+    dir = rotate_cw(dir);
     int off = 2;
     int ex0 = cx - off, ex1 = cx + off - 1;
     int ey = cy - 1;
@@ -1128,15 +1153,16 @@ static void draw_frame(void) {
         draw_ghost_body(cx+10, 90, COLOR_RED);
         draw_ghost_eyes(cx+10, 90, DIR_RIGHT, COLOR_BLUE);
 
-        const char *l1 = !two_player ? "> 1 JUGADOR  <" : "  1 JUGADOR   ";
-        const char *l2 =  two_player ? "> 2 JUGADORES<" : "  2 JUGADORES ";
-        renderer_draw_text(centered_x(l1,2), 140, l1, COLOR_WHITE, COLOR_BLACK, 2);
-        renderer_draw_text(centered_x(l2,2), 164, l2, COLOR_WHITE, COLOR_BLACK, 2);
+        // Mismo formato de líneas (guiones a los lados de la opción
+        // activa, ancho fijo para que el texto no "salte" al cambiar)
+        // y mismo texto de ayuda que draw_select_screen() en pong.c.
+        const char *l1 = two_player  ? "- 2 JUGADORES -" : "  2 JUGADORES  ";
+        const char *l2 = !two_player ? "- 1 JUGADOR   -" : "  1 JUGADOR    ";
+        renderer_draw_text(centered_x(l1,2), 150, l1, COLOR_WHITE, COLOR_BLACK, 2);
+        renderer_draw_text(centered_x(l2,2), 176, l2, COLOR_WHITE, COLOR_BLACK, 2);
 
-        renderer_draw_text(centered_x("ENC: cambia modo",1), 210, "ENC: cambia modo", COLOR_WHITE, COLOR_BLACK, 1);
-        renderer_draw_text(centered_x("BTN: confirmar",1),   222, "BTN: confirmar",   COLOR_WHITE, COLOR_BLACK, 1);
-        if (bon)
-            renderer_draw_text(centered_x("Pulsa para empezar",1), 250, "Pulsa para empezar", COLOR_YELLOW, COLOR_BLACK, 1);
+        renderer_draw_text(centered_x("GIRA PARA CAMBIAR - PULSA PARA JUGAR", 1), 230,
+                            "GIRA PARA CAMBIAR - PULSA PARA JUGAR", COLOR_WHITE, COLOR_BLACK, 1);
         return;
     }
 
@@ -1212,8 +1238,8 @@ static void read_player_turn(int encoder_index, int *acc, Dir *want) {
     int32_t d = controls_get_raw_delta(encoder_index);
     if (d == 0) return;
     *acc += (int)d;
-    if (*acc >= ENC_DETENT)  { *want = DIR_RIGHT; *acc = 0; }
-    if (*acc <= -ENC_DETENT) { *want = DIR_LEFT;  *acc = 0; }
+    if (*acc >= ENC_DETENT)  { *want = DIR_DOWN; *acc = 0; }
+    if (*acc <= -ENC_DETENT) { *want = DIR_UP;   *acc = 0; }
 }
 
 static void pm_tick(void) {
@@ -1254,13 +1280,13 @@ static void pm_tick(void) {
             demo_ai();
         } else {
             read_player_turn(0, &enc_acc, &pac.want);
-            if (controls_button_pressed(BTN_J1_A)) pac.want = DIR_UP;
-            if (controls_button_pressed(BTN_J1_B)) pac.want = DIR_DOWN;
+            if (controls_button_pressed(BTN_J1_A)) pac.want = DIR_LEFT;
+            if (controls_button_pressed(BTN_J1_B)) pac.want = DIR_RIGHT;
 
             if (two_player) {
                 read_player_turn(1, &enc2_acc, &pac2.want);
-                if (controls_button_pressed(BTN_J2_A)) pac2.want = DIR_UP;
-                if (controls_button_pressed(BTN_J2_B)) pac2.want = DIR_DOWN;
+                if (controls_button_pressed(BTN_J2_A)) pac2.want = DIR_LEFT;
+                if (controls_button_pressed(BTN_J2_B)) pac2.want = DIR_RIGHT;
             }
         }
 
