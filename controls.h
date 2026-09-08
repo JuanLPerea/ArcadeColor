@@ -23,12 +23,12 @@
  * Coinciden con el índice de cada pin dentro de button_pins[] en
  * controls.c -- si cambias el orden ahí, cambia esto también.
  */
-// #define BTN_J1_A    0
-// #define BTN_J1_B    1
-// #define BTN_J2_A    2
-// #define BTN_J2_B    3
-//#define BTN_ENC1_SW 4
-//#define BTN_ENC2_SW 5
+#define BTN_J1_A    0
+#define BTN_J1_B    1
+#define BTN_J2_A    2
+#define BTN_J2_B    3
+#define BTN_ENC1_SW 4
+#define BTN_ENC2_SW 5
 
 void controls_init(void);
 

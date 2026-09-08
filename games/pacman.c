@@ -1202,9 +1202,9 @@ static void draw_frame(void) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Entrada: J1 = encoder 0 (izq/der) + PIN_BTN_J1_A (arriba) + PIN_BTN_J1_B
-// (abajo). J2 = encoder 1 + PIN_BTN_J2_A/PIN_BTN_J2_B. Salir al menú:
-// mantener pulsados ambos SW de encoder a la vez.
+// Entrada: J1 = encoder 0 (izq/der) + BTN_J1_A (arriba) + BTN_J1_B
+// (abajo). J2 = encoder 1 + BTN_J2_A/BTN_J2_B. Salir al menú:
+// mantener pulsados ambos SW de encoder a la vez (BTN_ENC1_SW/BTN_ENC2_SW).
 // ─────────────────────────────────────────────────────────────────────────────
 #define ENC_DETENT 4   // 4 transiciones de cuadratura = 1 detent físico
 
@@ -1224,7 +1224,7 @@ static void pm_tick(void) {
         if (any || ++demo_ticks >= TICKS_S*30) { g_done = true; return; }
     }
 
-    bool exit_combo = controls_button_down(PIN_ENC1_SW) && controls_button_down(PIN_ENC2_SW);
+    bool exit_combo = controls_button_down(BTN_ENC1_SW) && controls_button_down(BTN_ENC2_SW);
     if (exit_combo && (state==PM_PLAYING||state==PM_READY||state==PM_DEAD)) {
         g_done = true; return;
     }
@@ -1254,13 +1254,13 @@ static void pm_tick(void) {
             demo_ai();
         } else {
             read_player_turn(0, &enc_acc, &pac.want);
-            if (controls_button_pressed(PIN_BTN_J1_A)) pac.want = DIR_UP;
-            if (controls_button_pressed(PIN_BTN_J1_B)) pac.want = DIR_DOWN;
+            if (controls_button_pressed(BTN_J1_A)) pac.want = DIR_UP;
+            if (controls_button_pressed(BTN_J1_B)) pac.want = DIR_DOWN;
 
             if (two_player) {
                 read_player_turn(1, &enc2_acc, &pac2.want);
-                if (controls_button_pressed(PIN_BTN_J2_A)) pac2.want = DIR_UP;
-                if (controls_button_pressed(PIN_BTN_J2_B)) pac2.want = DIR_DOWN;
+                if (controls_button_pressed(BTN_J2_A)) pac2.want = DIR_UP;
+                if (controls_button_pressed(BTN_J2_B)) pac2.want = DIR_DOWN;
             }
         }
 
