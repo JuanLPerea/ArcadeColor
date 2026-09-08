@@ -1011,6 +1011,89 @@ static bool audio_timer_callback(
 
 
 /* ============================================================
+ * PAC-MAN -- datos de efectos y jingle de inicio
+ *
+ * Portados desde el motor de ArcadePi (sound.h/.c de ese proyecto),
+ * que los guardaba como arrays {frecuencia,duración_ms} indexados por
+ * un enum SoundEffect. Aquí cada efecto es una función propia (ver
+ * estilo de sound_effect_lose_point()/sound_effect_victory() más
+ * abajo), así que las notas se declaran locales a cada función.
+ *
+ * NOTA: el secuenciador de canal 3 de este motor (channel3_seq_start)
+ * admite como mucho CHANNEL3_SEQ_MAX_NOTES=4 notas por efecto. Los
+ * datos originales de ArcadePi traían una nota NOTE_REST final de
+ * silencio en cada efecto (p.ej. power pellet: DO-MI-SOL-DO + silencio
+ * = 5 notas) -- ese silencio final no hace falta aquí: en cuanto la
+ * secuencia termina, channel3_seq_update() ya apaga el canal por su
+ * cuenta (ver más abajo), así que se omite y las 4 notas útiles caben
+ * justas.
+ * ============================================================ */
+
+/*
+ * Jingle de inicio de Pac-Man (~4300ms, una vez).
+ *
+ * Fuente: Pacman_Theme.mid — 220 BPM, ticks_per_beat=384 (mismo
+ * origen que usaba ArcadePi). Canal 1 = melodía (triangular, igual
+ * que la música de menú); canal 2 = bajo (cuadrada, para que se
+ * distinga timbre de la melodía). Los dos canales NO están
+ * sincronizados nota a nota (tienen distinto número de eventos:
+ * 61 en melodía, 52 en bajo) aunque ambos suman exactamente 4300ms
+ * en total -- por eso se avanzan con dos índices/temporizadores
+ * independientes en sound_update(), en vez de un único índice
+ * compartido como hace la música de menú.
+ */
+#define PACMAN_INTRO_CH1_LEN 61
+#define PACMAN_INTRO_CH2_LEN 52
+
+static const uint16_t pacman_intro_ch1_freq[PACMAN_INTRO_CH1_LEN] = {
+    262, 0, 523, 0, 392, 0, 330, 0,
+    523, 0, 392, 0, 330, 330, 0, 277,
+    0, 554, 0, 415, 0, 349, 0, 554,
+    0, 415, 0, 349, 349, 0, 262, 0,
+    523, 0, 392, 0, 330, 0, 523, 392,
+    0, 330, 330, 0, 330, 349, 370, 0,
+    370, 0, 392, 415, 0, 415, 440, 0,
+    466, 0, 523, 523, 0,
+};
+static const uint16_t pacman_intro_ch1_dur[PACMAN_INTRO_CH1_LEN] = {
+    68, 68, 68, 69, 68, 68, 68, 68,
+    68, 1, 68, 136, 68, 68, 137, 68,
+    68, 68, 69, 68, 68, 68, 68, 68,
+    1, 68, 136, 68, 68, 137, 68, 68,
+    68, 69, 68, 68, 68, 68, 68, 68,
+    137, 68, 68, 137, 68, 68, 68, 68,
+    68, 1, 68, 68, 68, 68, 68, 1,
+    68, 68, 68, 68, 73,
+};
+static const uint16_t pacman_intro_ch2_freq[PACMAN_INTRO_CH2_LEN] = {
+    131, 131, 131, 0, 196, 0, 131, 0,
+    131, 131, 0, 196, 0, 139, 139, 139,
+    0, 208, 0, 139, 0, 139, 139, 0,
+    208, 0, 131, 131, 131, 0, 196, 0,
+    131, 131, 0, 131, 0, 196, 0, 196,
+    196, 0, 220, 0, 220, 0, 247, 247,
+    0, 262, 262, 0,
+};
+static const uint16_t pacman_intro_ch2_dur[PACMAN_INTRO_CH2_LEN] = {
+    68, 68, 68, 205, 68, 68, 68, 1,
+    68, 68, 205, 68, 68, 68, 68, 68,
+    205, 68, 68, 68, 1, 68, 68, 204,
+    68, 69, 68, 68, 68, 205, 68, 68,
+    68, 68, 1, 68, 204, 68, 69, 68,
+    68, 136, 68, 1, 68, 136, 68, 68,
+    137, 68, 68, 73,
+};
+
+static volatile bool pacman_intro_active   = false;
+static volatile bool pacman_intro_ch1_done = false;
+static volatile bool pacman_intro_ch2_done = false;
+static uint8_t pacman_intro_ch1_index;
+static uint8_t pacman_intro_ch2_index;
+static absolute_time_t pacman_intro_ch1_next;
+static absolute_time_t pacman_intro_ch2_next;
+
+
+/* ============================================================
  * INICIALIZACIÓN
  * ============================================================ */
 
@@ -1233,6 +1316,53 @@ void sound_update(void)
     // Avanza la melodía corta de canal 3 (efectos de una nota con
     // apagado automático, o las secuencias de 2-4 notas).
     channel3_seq_update();
+
+    // Avanza el jingle de inicio de Pac-Man (canal 1 + canal 2, dos
+    // índices independientes -- ver comentario junto a los arrays
+    // pacman_intro_ch1/ch2 más arriba).
+    if (pacman_intro_active) {
+        uint32_t save = save_and_disable_interrupts();
+
+        if (!pacman_intro_ch1_done && time_reached(pacman_intro_ch1_next)) {
+            pacman_intro_ch1_index++;
+            if (pacman_intro_ch1_index >= PACMAN_INTRO_CH1_LEN) {
+                pacman_intro_ch1_done = true;
+                disable_channel(&channel1);
+            } else {
+                configure_channel(
+                    &channel1,
+                    pacman_intro_ch1_freq[pacman_intro_ch1_index],
+                    CHANNEL1_VOLUME,
+                    WAVE_TRIANGLE
+                );
+                pacman_intro_ch1_next =
+                    make_timeout_time_ms(pacman_intro_ch1_dur[pacman_intro_ch1_index]);
+            }
+        }
+
+        if (!pacman_intro_ch2_done && time_reached(pacman_intro_ch2_next)) {
+            pacman_intro_ch2_index++;
+            if (pacman_intro_ch2_index >= PACMAN_INTRO_CH2_LEN) {
+                pacman_intro_ch2_done = true;
+                disable_channel(&channel2);
+            } else {
+                configure_channel(
+                    &channel2,
+                    pacman_intro_ch2_freq[pacman_intro_ch2_index],
+                    CHANNEL2_VOLUME,
+                    WAVE_SQUARE
+                );
+                pacman_intro_ch2_next =
+                    make_timeout_time_ms(pacman_intro_ch2_dur[pacman_intro_ch2_index]);
+            }
+        }
+
+        if (pacman_intro_ch1_done && pacman_intro_ch2_done) {
+            pacman_intro_active = false;
+        }
+
+        restore_interrupts(save);
+    }
 
     // Avanza el silbido de la sirena del platillo (canal 2).
     if (
@@ -1532,4 +1662,161 @@ void sound_mute(void)
 void sound_unmute(void)
 {
     sound_enabled = true;
+}
+
+
+/* ============================================================
+ * PAC-MAN -- efectos y jingle de inicio
+ * ============================================================ */
+
+/*
+ * Come-punto alterno: dos notas cortas y agudas (igual que
+ * SFX_TICTAC_LO/HI de ArcadePi), alternando en cada punto comido para
+ * dar el efecto "waa-waa" clásico sin machacar siempre la misma nota.
+ */
+void sound_effect_pacman_chomp(bool alt)
+{
+    if (!sound_initialized) {
+        sound_init();
+    }
+
+    channel3_play_short(
+        alt ? 147 : 110,
+        CHANNEL3_VOLUME,
+        WAVE_SQUARE,
+        22
+    );
+}
+
+
+/*
+ * Power pellet: arpegio ascendente de 4 notas (DO-MI-SOL-DO), igual
+ * que SFX_LEVEL_UP de ArcadePi (que este juego reutilizaba también
+ * para la power pellet).
+ */
+void sound_effect_pacman_power(void)
+{
+    if (!sound_initialized) {
+        sound_init();
+    }
+
+    static const uint16_t freqs[4]     = { NOTE_C4, NOTE_E4, NOTE_G4, NOTE_C5 };
+    static const uint16_t durations[4] = {      60,      60,      60,     130 };
+
+    channel3_seq_start(freqs, durations, 4, CHANNEL3_VOLUME, WAVE_SQUARE);
+}
+
+
+/*
+ * Nivel superado: mismo sonido que sound_effect_pacman_power() (así
+ * era también en ArcadePi -- SFX_LEVEL_UP se reutilizaba para ambas
+ * cosas). Alias con nombre propio para que quede claro en pacman.c
+ * cuál es cuál en cada punto de la llamada.
+ */
+void sound_effect_pacman_levelup(void)
+{
+    sound_effect_pacman_power();
+}
+
+
+/*
+ * Fruta/bonus recogida: mismo arpegio que la power pellet pero más
+ * largo y con la última nota sostenida más tiempo (igual que
+ * SFX_SCORE de ArcadePi), para distinguirlo al oído.
+ */
+void sound_effect_pacman_fruit(void)
+{
+    if (!sound_initialized) {
+        sound_init();
+    }
+
+    static const uint16_t freqs[4]     = { NOTE_C4, NOTE_E4, NOTE_G4, NOTE_C5 };
+    static const uint16_t durations[4] = {      90,      90,      90,     200 };
+
+    channel3_seq_start(freqs, durations, 4, CHANNEL3_VOLUME, WAVE_SQUARE);
+}
+
+
+/*
+ * Fantasma comido en modo frightened: silbido descendente corto
+ * (igual que SFX_AST_SMALL de ArcadePi, que este juego reutilizaba).
+ */
+void sound_effect_pacman_eat_ghost(void)
+{
+    if (!sound_initialized) {
+        sound_init();
+    }
+
+    static const uint16_t freqs[4]     = { 320, 190, 110, 65 };
+    static const uint16_t durations[4] = {   8,  15,  20, 22 };
+
+    channel3_seq_start(freqs, durations, 4, CHANNEL3_VOLUME, WAVE_SAW);
+}
+
+
+/*
+ * Pac-Man muere: 4 notas descendentes largas (igual que
+ * SFX_GAME_OVER_LOSE de ArcadePi).
+ */
+void sound_effect_pacman_death(void)
+{
+    if (!sound_initialized) {
+        sound_init();
+    }
+
+    static const uint16_t freqs[4]     = { NOTE_G4, NOTE_F4, NOTE_E4, NOTE_C4 };
+    static const uint16_t durations[4] = {     120,     120,     120,     350 };
+
+    channel3_seq_start(freqs, durations, 4, CHANNEL3_VOLUME, WAVE_SQUARE);
+}
+
+
+/*
+ * Arranca el jingle de inicio (canal 1 + canal 2). Ver notas junto a
+ * los arrays pacman_intro_ch1/ch2 más arriba.
+ */
+void sound_start_pacman_intro(void)
+{
+    if (!sound_initialized) {
+        sound_init();
+    }
+
+    uint32_t save = save_and_disable_interrupts();
+
+    // Comparte canal 1/2 con la música de menú y canal 2 con la
+    // sirena del platillo -- si sonaba algo de eso, el jingle manda.
+    menu_music_playing    = false;
+    channel2_siren_active = false;
+
+    pacman_intro_active   = true;
+    pacman_intro_ch1_done = false;
+    pacman_intro_ch2_done = false;
+    pacman_intro_ch1_index = 0;
+    pacman_intro_ch2_index = 0;
+
+    configure_channel(&channel1, pacman_intro_ch1_freq[0], CHANNEL1_VOLUME, WAVE_TRIANGLE);
+    configure_channel(&channel2, pacman_intro_ch2_freq[0], CHANNEL2_VOLUME, WAVE_SQUARE);
+
+    pacman_intro_ch1_next = make_timeout_time_ms(pacman_intro_ch1_dur[0]);
+    pacman_intro_ch2_next = make_timeout_time_ms(pacman_intro_ch2_dur[0]);
+
+    restore_interrupts(save);
+}
+
+
+/*
+ * Corta el jingle antes de tiempo (p.ej. si se sale del juego a
+ * mitad). Si ya había terminado solo, no hace nada raro: simplemente
+ * vuelve a desactivar unos canales que ya estaban inactivos.
+ */
+void sound_stop_pacman_intro(void)
+{
+    uint32_t save = save_and_disable_interrupts();
+
+    pacman_intro_active = false;
+
+    disable_channel(&channel1);
+    disable_channel(&channel2);
+
+    restore_interrupts(save);
 }

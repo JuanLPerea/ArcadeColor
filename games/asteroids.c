@@ -61,6 +61,19 @@
 #define SCREEN_W 320
 #define SCREEN_H 240
 
+/*
+ * OJO -- bug en controls.c: controls_button_pressed()/controls_button_down()
+ * tratan su argumento como INDICE dentro de button_pins[] (0..5), no como
+ * el numero de pin GPIO. PIN_BTN_J1_A/J1_B/J2_A/J2_B (0,1,2,3) coinciden
+ * por casualidad con su indice, pero PIN_ENC1_SW/PIN_ENC2_SW (8 y 12) NO --
+ * por eso el hyperdrive (mas abajo) nunca se disparaba: se le pasaba el
+ * pin en vez del indice, y la comprobacion de rango de controls.c lo
+ * descartaba siempre. button_pins[] en controls.c tiene este orden:
+ * J1_A, J1_B, J2_A, J2_B, ENC1_SW, ENC2_SW -- de ahi el 4 y el 5.
+ */
+#define BTN_IDX_ENC1_SW  4
+#define BTN_IDX_ENC2_SW  5
+
 #define PLAY_X   4
 #define PLAY_Y   3
 #define PLAY_W   (SCREEN_W - 2 * PLAY_X)   // 312
@@ -1146,13 +1159,13 @@ static void as_tick(void) {
             if (update_ship(0, d0,
                         controls_button_down(PIN_BTN_J1_B),
                         controls_button_down(PIN_BTN_J1_A),
-                        controls_button_pressed(PIN_ENC1_SW))) hyper_died = true;
+                        controls_button_pressed(BTN_IDX_ENC1_SW))) hyper_died = true;
             if (num_players==2) {
                 int d1 = controls_get_raw_delta(1);
                 if (update_ship(1, d1,
                             controls_button_down(PIN_BTN_J2_B),
                             controls_button_down(PIN_BTN_J2_A),
-                            controls_button_pressed(PIN_ENC2_SW))) hyper_died = true;
+                            controls_button_pressed(BTN_IDX_ENC2_SW))) hyper_died = true;
             }
         }
 
