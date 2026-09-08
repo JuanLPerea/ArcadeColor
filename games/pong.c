@@ -161,6 +161,7 @@ static int   player_level;
 static int   levelup_timer;
 static int   paddle_h;
 static bool  g_done;
+static int   menu_enc_acc = 0;
 
 // Rastro de la última posición dibujada, para el borrado incremental
 // (ver draw_playing_frame). -1 = "aún no dibujado, no borrar nada".
@@ -621,10 +622,15 @@ static void pong_tick(void) {
     switch (state) {
 
     case S_SELECT:
-        if (controls_get_raw_delta(0) != 0) {
+
+        int d = controls_get_raw_delta(0);
+         if (d) {
             two_p = !two_p;
-            draw_select_screen();
-        }
+            menu_enc_acc += d;
+            if (menu_enc_acc >= 2)  { two_p = !two_p; menu_enc_acc = 0; draw_select_screen(); }
+            if (menu_enc_acc <= -2) { two_p = !two_p; menu_enc_acc = 0; draw_select_screen(); }
+         }
+
         if (controls_menu_select()) {
             p1.score = p2.score = 0;
             player_level = 0;

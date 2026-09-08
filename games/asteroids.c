@@ -1132,8 +1132,8 @@ static void as_tick(void) {
         int d = controls_get_raw_delta(0);
         if (d) {
             menu_enc_acc += d;
-            if (menu_enc_acc >= 2)  { num_players = (num_players==1)?2:1; menu_enc_acc = 0; draw_select_screen(); }
-            if (menu_enc_acc <= -2) { num_players = (num_players==1)?2:1; menu_enc_acc = 0; draw_select_screen(); }
+            if (menu_enc_acc >= 4)  { num_players = (num_players==1)?2:1; menu_enc_acc = 0; draw_select_screen(); }
+            if (menu_enc_acc <= -4) { num_players = (num_players==1)?2:1; menu_enc_acc = 0; draw_select_screen(); }
         }
         if (controls_menu_select()) {
             level = 1;
@@ -1155,16 +1155,16 @@ static void as_tick(void) {
         if (demo) {
             demo_ai(0);
         } else {
-            int d0 = controls_get_raw_delta(0);
+            int d0 = -controls_get_raw_delta(0);
             if (update_ship(0, d0,
-                        controls_button_down(PIN_BTN_J1_B),
-                        controls_button_down(PIN_BTN_J1_A),
+                        controls_button_down(BTN_J1_B),
+                        controls_button_down(BTN_J1_A),
                         controls_button_pressed(BTN_IDX_ENC1_SW))) hyper_died = true;
             if (num_players==2) {
-                int d1 = controls_get_raw_delta(1);
+                int d1 = -controls_get_raw_delta(1);
                 if (update_ship(1, d1,
-                            controls_button_down(PIN_BTN_J2_B),
-                            controls_button_down(PIN_BTN_J2_A),
+                            controls_button_down(BTN_J2_B),
+                            controls_button_down(BTN_J2_A),
                             controls_button_pressed(BTN_IDX_ENC2_SW))) hyper_died = true;
             }
         }
