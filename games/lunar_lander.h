@@ -1,7 +1,9 @@
-#ifndef GAME_LUNAR_LANDER_H
-#define GAME_LUNAR_LANDER_H
+#ifndef LUNARLANDER_H
+#define LUNARLANDER_H
 
 #include "game_common.h"
+
+#define LL_GAME_ID 6   // AJUSTAR: debe coincidir con el índice de "LUNAR LANDER" en games_list.c
 
 void game_lunar_lander_run(game_mode_t mode);
 
