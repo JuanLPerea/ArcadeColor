@@ -57,12 +57,23 @@
  *   J2: encoder 2 = arriba/abajo · BTN_J2_A = izquierda · BTN_J2_B = derecha
  *   Mantener pulsados ambos SW de encoder = salir al menú
  *
- *  7) SPRITES GIRADOS. Los sprites de Pac-Man/fantasmas (boca y mirada)
- *     se dibujan con la orientación real de movimiento girada 90° en el
- *     sentido de las agujas del reloj -- ver rotate_cw() más abajo, que
- *     se aplica dentro de draw_pac_sprite()/draw_ghost_eyes() para que
- *     todos los sitios donde se dibujan (juego, HUD de vidas, pantalla
- *     de selección) queden girados igual, sin tocar cada llamada.
+ *  7) FANTASMAS GIRADOS. El cuerpo del fantasma (cúpula + patas
+ *     dentadas) es una forma FIJA que no depende de hacia dónde se
+ *     mueve -- igual que en el arcade original -- así que draw_ghost_
+ *     body()/draw_ghost_eyes() dibujan esa silueta ya girada 90° en el
+ *     sentido de las agujas del reloj (cúpula a la derecha, patas a la
+ *     izquierda) para que se vea coherente en la pantalla vertical.
+ *     La pupila (mirada) SÍ sigue la dirección real de movimiento, sin
+ *     girar, igual que la boca de Pac-Man.
+ *
+ *  8) ROTACIÓN DE PANTALLA EN LAS PANTALLAS COMPARTIDAS. highscores_
+ *     draw()/highscores_enter() son de highscores.c, comunes a todos
+ *     los juegos, y están pensadas para la orientación apaisada
+ *     estándar (rotation=1) con la que las llaman el resto de juegos.
+ *     Como este archivo pone rotation=0 (vertical) al entrar y no lo
+ *     restaura hasta el final de game_pacman_run(), esas pantallas
+ *     compartidas se dibujaban con la rotación equivocada. Por eso se
+ *     vuelve a rotation=1 justo antes de usarlas (ver pm_tick()).
  */
 
 #include <stdlib.h>
@@ -81,6 +92,12 @@
 // ─────────────────────────────────────────────────────────────────────────────
 #define SCREEN_W   240
 #define SCREEN_H   320
+
+// Dimensiones bajo rotation=1 (apaisada), NO las de Pac-Man -- solo se
+// usan para la línea de ayuda de PM_SCORES, que se dibuja con esa
+// rotación activa (ver nota 8) en la cabecera del archivo).
+#define LANDSCAPE_W 320
+#define LANDSCAPE_H 240
 #define TICKS_S    62      // igual que el original: constante nominal para
                             // expresar duraciones en "ticks" (no es la tasa
                             // real del bucle, igual que en asteroids.c)
@@ -304,9 +321,9 @@ static uint8_t g_prev_rotation;   // rotación a restaurar al salir
 #define T_BONUS_VIS  (12*TICKS_S)
 #define T_BONUS_LO   (8*TICKS_S)
 #define T_BONUS_HI   (25*TICKS_S)
-#define T_DEAD_W    (2*TICKS_S)
-#define T_READY     (2*TICKS_S)
-#define T_LEVELUP   (3*TICKS_S)
+#define T_DEAD_W    (1*TICKS_S)
+#define T_READY     (1*TICKS_S)
+#define T_LEVELUP   (1*TICKS_S)
 
 #define PTS_DOT    10
 #define PTS_POWER  50
@@ -852,28 +869,13 @@ static void fill_circle(int cx, int cy, int r, uint16_t color) {
     }
 }
 
-// Gira una dirección 90° en el sentido de las agujas del reloj, SOLO
-// para la orientación visual del sprite (boca de Pac-Man, mirada de los
-// fantasmas) -- la dirección real de movimiento (Dir/DX/DY que usa la
-// física, el mapa y la IA) no se toca, se sigue moviendo en línea recta
-// hacia donde el jugador manda. Ver nota 7) en la cabecera del archivo.
-static Dir rotate_cw(Dir d) {
-    switch (d) {
-    case DIR_UP:    return DIR_RIGHT;
-    case DIR_RIGHT: return DIR_DOWN;
-    case DIR_DOWN:  return DIR_LEFT;
-    case DIR_LEFT:  return DIR_UP;
-    default:        return d;
-    }
-}
-
-// Pac-Man: círculo con cuña de boca abierta hacia 'dir' (girada 90° CW,
-// ver rotate_cw()). frame: 0=abierta del todo, 1=medio abierta,
-// 2=cerrada (círculo completo).
+// Pac-Man: círculo con cuña de boca abierta hacia 'dir' (dirección real
+// de movimiento, sin girar -- la boca tiene que apuntar hacia donde se
+// mueve). frame: 0=abierta del todo, 1=medio abierta, 2=cerrada (círculo
+// completo).
 static void draw_pac_sprite(int cx, int cy, Dir dir, int frame, uint16_t color) {
     int r = CELL/2 - 1; if (r < 3) r = 3;
     if (dir == DIR_NONE) dir = DIR_RIGHT;
-    dir = rotate_cw(dir);
     int8_t ddx = DX[dir], ddy = DY[dir];
 
     for (int dy = -r; dy <= r; dy++) {
@@ -893,42 +895,58 @@ static void draw_pac_sprite(int cx, int cy, Dir dir, int frame, uint16_t color) 
     }
 }
 
-// Fantasma: "cúpula" + cuerpo rectangular + 3 patas dentadas en la base.
-// eyes_dir: hacia dónde miran los ojos (blancos con pupila de color).
+// Fantasma: "cúpula" + cuerpo rectangular + 3 patas dentadas, pero toda
+// la silueta va girada 90° en el sentido de las agujas del reloj
+// respecto al dibujo "clásico" (cúpula arriba, patas abajo). Esta forma
+// es FIJA -- no depende de hacia dónde se mueve el fantasma, igual que
+// en el arcade original -- así que si no se gira aquí sigue apuntando
+// "hacia arriba" del viejo layout horizontal en vez de hacia donde
+// corresponde en esta pantalla vertical. Tras el giro: la cúpula queda
+// hacia la derecha ("este") y las patas dentadas hacia la izquierda
+// ("oeste").
 static void draw_ghost_body(int cx, int cy, uint16_t body_color) {
     int r = CELL/2 - 1; if (r < 3) r = 3;
 
-    // Cúpula (mitad superior del círculo)
-    for (int dy = -r; dy <= 0; dy++) {
-        int dx = isqrt_small(r*r - dy*dy);
-        renderer_fill_rect(cx - dx, cy + dy, 2*dx + 1, 1, body_color);
+    // Cúpula: semicírculo hacia la derecha (antes era hacia arriba)
+    for (int dx = 0; dx <= r; dx++) {
+        int dy = isqrt_small(r*r - dx*dx);
+        renderer_fill_rect(cx + dx, cy - dy, 1, 2*dy + 1, body_color);
     }
-    // Cuerpo recto
-    int body_h = r - 1; if (body_h < 1) body_h = 1;
-    renderer_fill_rect(cx - r, cy + 1, 2*r + 1, body_h, body_color);
+    // Cuerpo recto, pegado a la izquierda de la cúpula
+    int body_w = r - 1; if (body_w < 1) body_w = 1;
+    renderer_fill_rect(cx - body_w, cy - r, body_w, 2*r + 1, body_color);
 
-    // Base dentada (3 dientes con huecos entre ellos)
-    int by = cy + 1 + body_h;
-    int w = 2*r + 1;
-    int tooth = w / 3; if (tooth < 2) tooth = 2;
+    // Borde dentado (3 dientes con huecos entre ellos), ahora en el
+    // lado izquierdo/oeste en vez de abajo
+    int bx = cx - body_w - 1;
+    int h = 2*r + 1;
+    int tooth = h / 3; if (tooth < 2) tooth = 2;
     for (int i = 0; i < 3; i++) {
-        int tx0 = cx - r + i*tooth;
-        int tw = tooth - 1; if (tw < 1) tw = 1;
-        renderer_fill_rect(tx0, by, tw, 1, body_color);
+        int ty0 = cy - r + i*tooth;
+        int th = tooth - 1; if (th < 1) th = 1;
+        renderer_fill_rect(bx, ty0, 1, th, body_color);
     }
 }
 
 static void draw_ghost_eyes(int cx, int cy, Dir dir, uint16_t pupil_color) {
-    dir = rotate_cw(dir);
-    int off = 2;
-    int ex0 = cx - off, ex1 = cx + off - 1;
-    int ey = cy - 1;
-    renderer_fill_rect(ex0, ey, 2, 2, COLOR_WHITE);
-    renderer_fill_rect(ex1, ey, 2, 2, COLOR_WHITE);
+    // Las cuencas (parte blanca) son una forma fija pegada al cuerpo,
+    // así que van giradas igual que draw_ghost_body(): apiladas en
+    // vertical junto al lado "este" (donde ahora está la cúpula), en
+    // vez de una al lado de la otra como en el dibujo horizontal
+    // original.
+    int ex = cx;
+    int ey0 = cy - 2, ey1 = cy + 1;
+    renderer_fill_rect(ex, ey0, 2, 2, COLOR_WHITE);
+    renderer_fill_rect(ex, ey1, 2, 2, COLOR_WHITE);
+
+    // La pupila SÍ sigue la dirección real de movimiento, SIN girar --
+    // igual que la boca de Pac-Man: así el jugador ve hacia dónde va
+    // el fantasma de verdad, no una dirección girada sin sentido para
+    // el jugador.
     int pdx = (dir==DIR_LEFT) ? -1 : (dir==DIR_RIGHT) ? 1 : 0;
     int pdy = (dir==DIR_UP)   ? -1 : (dir==DIR_DOWN)  ? 1 : 0;
-    renderer_fill_rect(ex0+pdx, ey+pdy, 1, 1, pupil_color);
-    renderer_fill_rect(ex1+pdx, ey+pdy, 1, 1, pupil_color);
+    renderer_fill_rect(ex+pdx, ey0+pdy, 1, 1, pupil_color);
+    renderer_fill_rect(ex+pdx, ey1+pdy, 1, 1, pupil_color);
 }
 
 // Colores clásicos de los 4 fantasmas (aprox en RGB565; naranja no está
@@ -1095,6 +1113,15 @@ static int centered_x(const char *text, int scale) {
     return (x < 0) ? 0 : x;
 }
 
+// Igual que centered_x(), pero para texto dibujado con rotation=1
+// (horizontal, LANDSCAPE_W de ancho real) en vez de con la vertical
+// propia de Pac-Man -- ver nota 8) en la cabecera del archivo.
+static int centered_x_lw(const char *text, int scale) {
+    int w = (int)st7789_text_width(text, (uint8_t)scale);
+    int x = (LANDSCAPE_W - w) / 2;
+    return (x < 0) ? 0 : x;
+}
+
 static void draw_hud(void) {
     char buf[32];
 
@@ -1147,21 +1174,26 @@ static void draw_frame(void) {
 
     switch (state) {
     case PM_SELECT: {
-        int cx = SCREEN_W/2;
-        renderer_draw_text(centered_x("PAC-MAN", 3), 40, "PAC-MAN", COLOR_YELLOW, COLOR_BLACK, 3);
-        draw_pac_sprite(cx-30, 90, DIR_RIGHT, 0, COLOR_YELLOW);
-        draw_ghost_body(cx+10, 90, COLOR_RED);
-        draw_ghost_eyes(cx+10, 90, DIR_RIGHT, COLOR_BLUE);
+        // Esta pantalla se muestra con rotation=1 (horizontal, ver
+        // game_pacman_run()), así que usa LANDSCAPE_W/H y
+        // centered_x_lw() en vez de las medidas verticales propias de
+        // Pac-Man -- y el mismo layout relativo a CY que
+        // draw_select_screen() en pong.c.
+        int lcx = LANDSCAPE_W/2, lcy = LANDSCAPE_H/2;
+        renderer_draw_text(centered_x_lw("PAC-MAN", 3), lcy-60, "PAC-MAN", COLOR_YELLOW, COLOR_BLACK, 3);
+        draw_pac_sprite(lcx-30, lcy-25, DIR_RIGHT, 0, COLOR_YELLOW);
+        draw_ghost_body(lcx+10, lcy-25, COLOR_RED);
+        draw_ghost_eyes(lcx+10, lcy-25, DIR_RIGHT, COLOR_BLUE);
 
         // Mismo formato de líneas (guiones a los lados de la opción
         // activa, ancho fijo para que el texto no "salte" al cambiar)
         // y mismo texto de ayuda que draw_select_screen() en pong.c.
         const char *l1 = two_player  ? "- 2 JUGADORES -" : "  2 JUGADORES  ";
         const char *l2 = !two_player ? "- 1 JUGADOR   -" : "  1 JUGADOR    ";
-        renderer_draw_text(centered_x(l1,2), 150, l1, COLOR_WHITE, COLOR_BLACK, 2);
-        renderer_draw_text(centered_x(l2,2), 176, l2, COLOR_WHITE, COLOR_BLACK, 2);
+        renderer_draw_text(centered_x_lw(l1,2), lcy-10, l1, COLOR_WHITE, COLOR_BLACK, 2);
+        renderer_draw_text(centered_x_lw(l2,2), lcy+16, l2, COLOR_WHITE, COLOR_BLACK, 2);
 
-        renderer_draw_text(centered_x("GIRA PARA CAMBIAR - PULSA PARA JUGAR", 1), 230,
+        renderer_draw_text(centered_x_lw("GIRA PARA CAMBIAR - PULSA PARA JUGAR", 1), lcy+60,
                             "GIRA PARA CAMBIAR - PULSA PARA JUGAR", COLOR_WHITE, COLOR_BLACK, 1);
         return;
     }
@@ -1182,14 +1214,15 @@ static void draw_frame(void) {
         return;
 
     case PM_LEVELUP: {
-        if (two_player && bonus_winner > 0) {
-            char bw[20];
-            snprintf(bw, sizeof(bw), "BONUS -> J%d!", bonus_winner);
-            renderer_draw_text(centered_x(bw,1), 120, bw, COLOR_YELLOW, COLOR_BLACK, 1);
+        draw_map(); draw_pacman(); draw_ghosts(); draw_hud();
+        if (bon) {
+            char b[16]; snprintf(b, sizeof(b), "NIVEL %d", level);
+            renderer_draw_text(centered_x(b,2), CELL_CY(11)-7, b, COLOR_YELLOW, COLOR_BLACK, 2);
+            if (two_player && bonus_winner > 0) {
+                char bw[20]; snprintf(bw, sizeof(bw), "BONUS -> J%d!", bonus_winner);
+                renderer_draw_text(centered_x(bw,1), CELL_CY(11)+14, bw, COLOR_YELLOW, COLOR_BLACK, 1);
+            }
         }
-        char b[8]; snprintf(b,sizeof(b),"%d",level);
-        renderer_draw_text(centered_x("NIVEL SUPERADO",1), 150, "NIVEL SUPERADO", COLOR_WHITE, COLOR_BLACK, 1);
-        renderer_draw_text(centered_x(b,3), 170, b, COLOR_YELLOW, COLOR_BLACK, 3);
         return;
     }
 
@@ -1211,11 +1244,13 @@ static void draw_frame(void) {
             renderer_draw_text(centered_x("Pulsa para continuar",1), 250, "Pulsa para continuar", COLOR_WHITE, COLOR_BLACK, 1);
         return;
 
-    case PM_SCORES:
+    case PM_SCORES: {
         highscores_draw(PM_GAME_ID, "PAC-MAN", 20);
         if (bon)
-            renderer_draw_text(centered_x("Pulsa para continuar",1), SCREEN_H-20, "Pulsa para continuar", COLOR_WHITE, COLOR_BLACK, 1);
+            renderer_draw_text(centered_x_lw("Pulsa para continuar",1), LANDSCAPE_H-20,
+                                "Pulsa para continuar", COLOR_WHITE, COLOR_BLACK, 1);
         return;
+    }
 
     default: break;
     }
@@ -1265,8 +1300,14 @@ static void pm_tick(void) {
             p2_dead_anim=false; p2_dead_cnt=0;
             level_init();
             sound_start_pacman_intro();
-            pause_cnt = (4300 * TICKS_S) / 1000 + 10;
+            pause_cnt = (1000 * TICKS_S) / 1000 + 10;
             state=PM_READY;
+            // El menú se mostró en horizontal (rotation=1); el juego en
+            // sí necesita vertical para encajar el laberinto -- ver
+            // nota sobre rotación en game_pacman_run().
+            st7789_set_rotation(0);
+            renderer_clear(COLOR_BLACK);
+            renderer_flush();
         }
         break;
     }
@@ -1331,10 +1372,20 @@ static void pm_tick(void) {
                     if (!pac.alive && lives <= 0) {
                         sound_stop_pacman_intro();
                         if (!demo_mode) {
+                            // highscores_enter() está pensada para la rotación
+                            // estándar (apaisada) que usan el resto de juegos,
+                            // no para el rotation=0 vertical de Pac-Man -- ver
+                            // nota 8) en la cabecera del archivo.
+                            st7789_set_rotation(1);
+                            renderer_clear(COLOR_BLACK);
+                            renderer_flush();
                             if (highscores_is_top(PM_GAME_ID,(uint32_t)score))  highscores_enter(PM_GAME_ID,(uint32_t)score);
                             if (two_player && highscores_is_top(PM_GAME_ID,(uint32_t)score2)) highscores_enter(PM_GAME_ID,(uint32_t)score2);
+                            st7789_set_rotation(0);
+                            renderer_clear(COLOR_BLACK);
+                            renderer_flush();
                         }
-                        state=PM_GAMEOVER; pause_cnt=TICKS_S*3;
+                        state=PM_GAMEOVER; pause_cnt=TICKS_S*1;
                     }
                 }
             }
@@ -1373,10 +1424,17 @@ static void pm_tick(void) {
             if (j1_out && j2_out) {
                 sound_stop_pacman_intro();
                 if (!demo_mode) {
+                    // Ver nota 8) en la cabecera del archivo.
+                    st7789_set_rotation(1);
+                    renderer_clear(COLOR_BLACK);
+                    renderer_flush();
                     if (highscores_is_top(PM_GAME_ID,(uint32_t)score))  highscores_enter(PM_GAME_ID,(uint32_t)score);
                     if (two_player && highscores_is_top(PM_GAME_ID,(uint32_t)score2)) highscores_enter(PM_GAME_ID,(uint32_t)score2);
+                    st7789_set_rotation(0);
+                    renderer_clear(COLOR_BLACK);
+                    renderer_flush();
                 }
-                state=PM_GAMEOVER; pause_cnt=TICKS_S*3;
+                state=PM_GAMEOVER; pause_cnt=TICKS_S*1;
             } else {
                 if (j1_died) {
                     if (lives > 0) pac_reset();
@@ -1402,7 +1460,18 @@ static void pm_tick(void) {
         break;
 
     case PM_GAMEOVER:
-        if (controls_menu_select() || --pause_cnt<=0) { state=PM_SCORES; pause_cnt=0; }
+        if (controls_menu_select() || --pause_cnt<=0) {
+            state=PM_SCORES; pause_cnt=0;
+            // highscores_draw() se llama cada frame mientras dure este
+            // estado; se cambia la rotación una sola vez aquí (no en
+            // draw_frame(), que corre cada tick) -- ver nota 8) en la
+            // cabecera. No hace falta deshacerlo: es la última pantalla
+            // antes de salir, y game_pacman_run() ya restaura
+            // rotation=1 al terminar el bucle.
+            st7789_set_rotation(1);
+            renderer_clear(COLOR_BLACK);
+            renderer_flush();
+        }
         if (demo_mode && pause_cnt<=0) g_done=true;
         break;
 
@@ -1434,11 +1503,16 @@ void game_pacman_run(game_mode_t mode) {
         level_init();
     }
 
-    // Rotar a vertical para encajar el laberinto (ver notas de cabecera).
+    // Rotación inicial. El menú de 1/2 jugadores (PM_SELECT) se dibuja
+    // en horizontal (rotation=1), igual que el resto de menús
+    // compartidos (records, selector de juego) -- se pasa a vertical
+    // (rotation=0, para encajar el laberinto) justo al confirmar la
+    // partida, ver el case PM_SELECT en pm_tick(). En modo demo no hay
+    // pantalla de selección, así que se entra directo en vertical.
     // rotation=0 -> 240x320; si en tu panel sale al revés, prueba rotation=2
     // (misma resolución, 180° girada) -- ver comentario de st7789_set_rotation
     // en st7789.h.
-    st7789_set_rotation(0);
+    st7789_set_rotation(demo_mode ? 0 : 1);
     renderer_clear(COLOR_BLACK);
     renderer_flush();
 
