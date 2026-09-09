@@ -10,7 +10,7 @@
 #include "night_driver.h"
 #include "pacman.h"
 #include "paratrooper.h"
-#include "pinball.h"
+#include "frogger.h"
 #include "tetris.h"
 
 const game_entry_t games_list[NUM_GAMES] = {
@@ -24,6 +24,6 @@ const game_entry_t games_list[NUM_GAMES] = {
     { "NIGHT DRIVER",   game_night_driver_run },
     { "PAC-MAN",        game_pacman_run },
     { "PARATROOPER",    game_paratrooper_run },
-    { "PINBALL",        game_pinball_run },
+    { "FROGGER",        game_frogger_run },
     { "TETRIS",         game_tetris_run },
 };

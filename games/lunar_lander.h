@@ -1,5 +1,5 @@
-#ifndef LUNARLANDER_H
-#define LUNARLANDER_H
+#ifndef LUNAR_LANDER_H
+#define LUNAR_LANDER_H
 
 #include "game_common.h"
 

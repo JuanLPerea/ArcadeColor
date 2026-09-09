@@ -60,7 +60,7 @@ add_executable(ArcadeColor
         games/night_driver.c
         games/pacman.c
         games/paratrooper.c
-        games/pinball.c
+        games/frogger.c
         games/tetris.c
 )
 

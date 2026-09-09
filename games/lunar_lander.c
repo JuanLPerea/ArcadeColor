@@ -1,5 +1,5 @@
 /**
- * lunarlander.c -- portado de la versión previa (vídeo compuesto,
+ * lunar_lander.c -- portado de la versión previa (vídeo compuesto,
  * 768x576, callbacks de draw/tick a ~62Hz) a ArcadeColor. Mismo
  * concepto (física de descenso con inercia, terreno generado por
  * nivel, plataformas de distinta dificultad, combustible limitado,
@@ -26,23 +26,30 @@
  *        encoder que ya usaba el original para el ángulo)
  *      * BTN_J1_A (mantenido)           -> empuje SUAVE
  *      * BTN_J1_B (mantenido)           -> empuje FUERTE
- *      * PIN_ENC1_SW (flanco)           -> maniobra de aterrizaje
- *        (antes solo disponible "en modo zoom"; aquí se habilita
- *        por altitud sobre el terreno, ver LL_MANEUVER_ALT, ya que
- *        hemos eliminado la cámara de zoom -- ver más abajo).
+ *      * BTN_ENC1_SW (flanco)           -> maniobra de aterrizaje:
+ *        endereza la nave (ángulo 0) y anula su velocidad horizontal
+ *        al instante, con un breve impulso correctivo. Disponible en
+ *        cualquier momento del vuelo (con combustible), sin más
+ *        condiciones -- una versión anterior la restringía a "casi
+ *        vertical y ya casi sin velocidad horizontal", que es
+ *        precisamente lo que la maniobra tiene que CONSEGUIR, así
+ *        que apenas llegaba a activarse nunca.
  *    Juego de un solo jugador (como el original); game_mode_t se
  *    admite por uniformidad con el resto de juegos, pero solo se
  *    distingue demo vs partida normal.
- *  - SIN CÁMARA DE ZOOM: el original ampliaba x2 la vista al bajar
- *    de cierta altitud para dar precisión visual en pantallas de
- *    768x576. En una pantalla de 320x240 esa ampliación ya no hace
- *    falta (el campo de juego es, relativamente, mucho más
- *    "cercano"), y mantenerla habría obligado a redibujar la
- *    escena completa por SPI en cada tick del descenso final -- 
- *    inasumible al mismo coste que ya limitó a Pong/Space
- *    Invaders/Asteroids a redibujado incremental. Se elimina el
- *    sistema world_to_screen/zoom_active por completo: coordenadas
- *    de mundo = coordenadas de pantalla.
+ *  - CÁMARA DE ZOOM (recuperada del original): al bajar de cierta
+ *    altitud sobre el terreno la vista se amplía x2, centrada en la
+ *    nave (ver world_to_screen/update_zoom), igual que hacía el
+ *    original para dar precisión en el aterrizaje. Con render
+ *    incremental esto tiene un coste que el resto del juego no
+ *    paga: mientras el zoom está activo, la cámara se mueve cada
+ *    tick, así que "borrar la caja anterior" ya no es una operación
+ *    válida (la transformación cambió) -- por eso, SOLO durante el
+ *    zoom, se hace un redibujado COMPLETO del área de juego en cada
+ *    tick (ver draw_zoomed_frame), exactamente como hacía el
+ *    renderer de vídeo compuesto original en todo momento. Es más
+ *    lento (menos fluido) que el resto del juego, pero solo ocurre
+ *    cerca del suelo, que es precisamente cuando conviene ir despacio.
  *  - RENDER INCREMENTAL, no redibujado completo cada frame (a
  *    diferencia del original, que reconstruía toda la escena en
  *    cada llamada a ll_draw() porque su renderer de vídeo compuesto
@@ -54,7 +61,7 @@
  *        el terreno, así que borrar su caja delimitadora con negro
  *        dejaría "agujeros" en el suelo. Por eso, al borrar, se
  *        restaura primero el terreno bajo esa caja (ver
- *        redraw_terrain_box) antes de pintar la nueva posición --
+ *        erase_box_over_terrain) antes de pintar la nueva posición --
  *        mismo principio que erase_box() en asteroids.c pero con un
  *        paso extra porque aquí sí hay fondo estático que proteger.
  *      * La nave se dibuja VECTORIAL (líneas), no como el hexágono
@@ -85,7 +92,7 @@
  *    igual que AS_SELECT en asteroids.c.
  *  - Sin hs_input/LL_ENTER_NAME: highscores_enter() bloqueante,
  *    exactamente como en asteroids.c (y como pong.c/space_invaders.c).
- *  - Bucle propio: game_lunarlander_run(mode) con su propio bucle
+ *  - Bucle propio: game_lunar_lander_run(mode) con su propio bucle
  *    while(!g_done) { controls_update(); ll_tick(); sound_update();
  *    sleep_ms(8); }, nada de callbacks de draw/tick registrados.
  */
@@ -147,6 +154,15 @@
 #define LAND_VX_MAX  0            // vx debe ser exactamente 0
 
 #define SHIP_RADIUS 10   // para colisión con el terreno (foot_y = y + SHIP_RADIUS)
+
+/*
+ * BTN_J1_A/BTN_J1_B/BTN_ENC1_SW ya vienen definidos en controls.h
+ * (índices dentro de button_pins[], NO números de pin GPIO -- ese
+ * era el bug de la versión anterior: se usaba PIN_ENC1_SW, un número
+ * de GPIO, donde controls_button_pressed()/down() esperan un índice
+ * 0-5). No se redefinen aquí -- se usan directamente los de
+ * controls.h.
+ */
 
 // angle_to_sprite: convierte ángulo continuo 0-359 a una de 16
 // posiciones discretas -- usado para elegir el vector de empuje fijo
@@ -236,7 +252,29 @@ static int      engine_thrust;   // 0, THRUST_SOFT o THRUST_HARD
 static int      exhaust_anim;
 static int      maneuver_ticks;  // ticks restantes de impulso de maniobra de aterrizaje
 #define MANEUVER_DURATION   6    // ~0.1s a 60 ticks/s nominales
-#define LL_MANEUVER_ALT    58    // altura sobre el suelo (px) por debajo de la cual se permite la maniobra
+
+// ---------------------------------------------------------------------------
+// Cámara / zoom -- recuperado del original: al bajar de cierta
+// altitud sobre el terreno, la vista se amplía x2 centrada en la
+// nave, para dar precisión en el tramo final de aterrizaje.
+// Histéresis (ENTER/EXIT) para evitar parpadeo al entrar/salir justo
+// en el umbral. Umbrales reescalados del original (100/170 sobre
+// PLAY_H=400) al nuevo PLAY_H=234.
+//
+// Coste de SPI: a diferencia del resto del juego (render incremental
+// con borrado por caja), MIENTRAS zoom_active está activo se hace un
+// redibujado COMPLETO del área de juego cada tick (ver
+// draw_zoomed_frame), igual que hacía el renderer de vídeo compuesto
+// original -- porque la cámara se mueve cada tick y "borrar la caja
+// anterior" ya no es válido bajo una transformación que cambió. Es
+// más lento (el tramo final de aterrizaje va notablemente menos
+// fluido), pero solo ocurre cerca del suelo, que es precisamente
+// cuando el jugador quiere ir despacio y con precisión.
+// ---------------------------------------------------------------------------
+#define ZOOM_ALT_ENTER  55
+#define ZOOM_ALT_EXIT   95
+static bool zoom_active = false;
+static bool field_needs_redraw = true;   // declarado aquí (no junto al resto de trazas de render, más abajo) porque update_zoom() lo necesita
 
 static int     score, lives, level, blink, pause_ticks, demo_ticks, game_ticks, landed_pad;
 static int     enc_acc;
@@ -393,6 +431,46 @@ static int terrain_y_at(int px) {
     return TERRAIN_Y_MAX;
 }
 
+/*
+ * Transforma una coordenada de MUNDO (px de pantalla en vista
+ * normal) a coordenada de PANTALLA, aplicando la cámara de zoom si
+ * está activa. Sin zoom es la identidad -- así todo el código de
+ * dibujo del modo zoom (terreno/nave/partículas) puede reutilizar
+ * las mismas coordenadas de mundo que el resto del juego sin
+ * bifurcar la lógica de física.
+ *
+ * La nave NO se escala con el zoom (se dibuja al mismo tamaño,
+ * igual que en el original) -- solo se amplían las distancias al
+ * punto donde está la nave, dando sensación de acercamiento.
+ */
+#define ZOOM_FACTOR 2
+static void world_to_screen(int wx, int wy, int *sx, int *sy) {
+    if (!zoom_active) { *sx = wx; *sy = wy; return; }
+    int spx = FP2PX(ship_x), spy = FP2PX(ship_y);
+    *sx = CX + (wx - spx) * ZOOM_FACTOR;
+    *sy = CY + (wy - spy) * ZOOM_FACTOR;
+}
+
+/*
+ * Activa/desactiva el zoom según la altitud sobre el terreno, con
+ * histéresis (ENTER/EXIT) para que no parpadee justo en el umbral.
+ * Al SALIR del zoom, se fuerza field_needs_redraw para que la vista
+ * normal (estática, incremental) se reconstruya desde cero -- la
+ * última imagen dibujada en pantalla era la vista ampliada, que ya
+ * no es válida como referencia para el borrado incremental normal.
+ */
+static void update_zoom(void) {
+    int sx = FP2PX(ship_x), sy = FP2PX(ship_y);
+    int gy = terrain_y_at(sx);
+    int dist = gy - (sy + SHIP_RADIUS);
+    if (dist < 0) dist = 0;
+
+    bool was = zoom_active;
+    if (!zoom_active && dist < ZOOM_ALT_ENTER) zoom_active = true;
+    if ( zoom_active && dist > ZOOM_ALT_EXIT)  zoom_active = false;
+    if (was && !zoom_active) field_needs_redraw = true;
+}
+
 // COLOR_PAD marca visualmente cada plataforma coloreando ESE tramo de
 // terreno (en vez de postes/luces/texto flotante, ver cabecera del
 // archivo -- esos elementos quedaban dentro del área de vuelo y no
@@ -418,18 +496,41 @@ static void terrain_col_fill(int x, uint16_t override_color, bool use_override) 
     renderer_fill_rect(x, top, 1, bottom-top, c);
 }
 
-// Redibuja el terreno SOLO en la franja horizontal que una caja
-// (nave, partícula...) acaba de borrar, para no dejar agujeros
-// negros en el suelo cuando el objeto vuela bajo. Se limita a las
-// columnas que intersectan la caja y recorta a los límites del
-// campo de juego -- mismo espíritu que erase_box() en asteroids.c,
-// con el paso extra de "curar" el fondo estático debajo.
-static void redraw_terrain_box(int x, int y, int w, int h) {
-    (void)y; (void)h; // el relleno de terreno siempre baja hasta el suelo del campo; no hace falta limitar por y
-    int x0 = x, x1 = x + w;
-    if (x0 < PLAY_X) x0 = PLAY_X;
-    if (x1 > PLAY_X+PLAY_W) x1 = PLAY_X+PLAY_W;
-    for (int xs = x0; xs < x1; xs++) terrain_col_fill(xs, 0, false);
+/*
+ * Borra una caja (nave, partícula...) que puede estar total o
+ * parcialmente sobre el cielo (negro) y/o sobre el terreno sólido.
+ *
+ * BUG corregido aquí: la versión anterior solo "redibujaba terreno"
+ * desde el nivel del suelo hacia abajo, pero nunca pintaba de negro
+ * la parte de la caja que cae en el cielo -- que es donde la nave
+ * pasa la mayor parte del vuelo. Resultado: la posición anterior de
+ * la nave nunca se borraba de verdad y se veía como un rastro.
+ *
+ * Ahora: 1) se pinta TODA la caja de negro (borra el cielo), y
+ *        2) se repinta el terreno SOLO en la franja de la caja que
+ *           cae por debajo de la línea de superficie en cada
+ *           columna (para no dejar agujeros negros en el suelo
+ *           cuando el objeto vuela bajo o aterriza).
+ */
+static void erase_box_over_terrain(int x, int y, int w, int h) {
+    if (x < PLAY_X) { w += (x - PLAY_X); x = PLAY_X; }
+    if (y < PLAY_Y) { h += (y - PLAY_Y); y = PLAY_Y; }
+    if (w <= 0 || h <= 0) return;
+    if (x + w > PLAY_X+PLAY_W) w = PLAY_X+PLAY_W - x;
+    if (y + h > PLAY_Y+PLAY_H) h = PLAY_Y+PLAY_H - y;
+    if (w <= 0 || h <= 0) return;
+
+    renderer_fill_rect(x, y, w, h, COLOR_BLACK);
+
+    for (int xs = x; xs < x + w; xs++) {
+        int gy = terrain_y_at(xs);
+        int top = gy < y ? y : gy;
+        int bottom = y + h;
+        if (bottom > top) {
+            uint16_t c = is_pad_col(xs) ? COLOR_PAD : COLOR_TERRAIN;
+            renderer_fill_rect(xs, top, 1, bottom-top, c);
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -507,37 +608,43 @@ static void game_start(void) {
 // ---------------------------------------------------------------------------
 #define SHIP_BBOX_R 17
 
-static void draw_ship_at(int cx, int cy, int angle, bool engine, uint16_t color) {
+/*
+ * scale: 1 en el juego (tamaño normal). La pantalla de inicio usa un
+ * valor mayor para un icono grande y reconocible -- se aplica a la
+ * geometría local ANTES de rotar, la línea sigue siendo del mismo
+ * grosor (2px) a cualquier escala.
+ */
+static void draw_ship_at(int cx, int cy, int angle, bool engine, uint16_t color, int scale) {
     int hx[6], hy[6];
     static const int8_t vxl[6] = { -5,  5,  7,  5, -5, -7 };
     static const int8_t vyl[6] = { -8, -8,  0,  7,  7,  0 };
-    for (int i = 0; i < 6; i++) rot(cx, cy, vxl[i], vyl[i], angle, &hx[i], &hy[i]);
+    for (int i = 0; i < 6; i++) rot(cx, cy, vxl[i]*scale, vyl[i]*scale, angle, &hx[i], &hy[i]);
     for (int i = 0; i < 6; i++) line(hx[i], hy[i], hx[(i+1)%6], hy[(i+1)%6], color);
 
     int ax0,ay0,ax1,ay1;
-    rot(cx,cy, 0,-13, angle, &ax0,&ay0);
-    rot(cx,cy, 0, -8, angle, &ax1,&ay1);
+    rot(cx,cy, 0*scale,-13*scale, angle, &ax0,&ay0);
+    rot(cx,cy, 0*scale, -8*scale, angle, &ax1,&ay1);
     line(ax0,ay0,ax1,ay1, color);
 
     int p1x,p1y,p2x,p2y,p3x,p3y;
-    rot(cx,cy,-7,0,  angle,&p1x,&p1y);
-    rot(cx,cy,-12,11,angle,&p2x,&p2y);
-    rot(cx,cy,-9,11, angle,&p3x,&p3y);
+    rot(cx,cy,-7*scale,0,      angle,&p1x,&p1y);
+    rot(cx,cy,-12*scale,11*scale,angle,&p2x,&p2y);
+    rot(cx,cy,-9*scale,11*scale, angle,&p3x,&p3y);
     line(p1x,p1y,p2x,p2y, color);
     line(p2x,p2y,p3x,p3y, color);
 
-    rot(cx,cy, 7,0,  angle,&p1x,&p1y);
-    rot(cx,cy, 12,11,angle,&p2x,&p2y);
-    rot(cx,cy, 9,11, angle,&p3x,&p3y);
+    rot(cx,cy, 7*scale,0,      angle,&p1x,&p1y);
+    rot(cx,cy, 12*scale,11*scale,angle,&p2x,&p2y);
+    rot(cx,cy, 9*scale,11*scale, angle,&p3x,&p3y);
     line(p1x,p1y,p2x,p2y, color);
     line(p2x,p2y,p3x,p3y, color);
 
     if (engine && (blink%4)<3) {
-        int fl = 5 + (exhaust_anim%3)*3;
+        int fl = (5 + (exhaust_anim%3)*3) * scale;
         int f1x,f1y,f2x,f2y,fmx,fmy;
-        rot(cx,cy,-3,7, angle,&f1x,&f1y);
-        rot(cx,cy, 3,7, angle,&f2x,&f2y);
-        rot(cx,cy, 0,7+fl, angle,&fmx,&fmy);
+        rot(cx,cy,-3*scale,7*scale, angle,&f1x,&f1y);
+        rot(cx,cy, 3*scale,7*scale, angle,&f2x,&f2y);
+        rot(cx,cy, 0,7*scale+fl, angle,&fmx,&fmy);
         line(f1x,f1y,fmx,fmy, COLOR_FLAME);
         line(f2x,f2y,fmx,fmy, COLOR_FLAME);
     }
@@ -547,10 +654,9 @@ static void draw_ship_at(int cx, int cy, int angle, bool engine, uint16_t color)
 // Render incremental -- mismo patrón que asteroids.c: se guarda la
 // posición previa de cada elemento y solo se borra+redibuja si algo
 // cambió. A diferencia de asteroids.c, borrar aquí implica primero
-// restaurar el terreno bajo la caja (ver redraw_terrain_box), porque
+// restaurar el terreno bajo la caja (ver erase_box_over_terrain), porque
 // el fondo no es un campo vacío sino terreno sólido.
 // ---------------------------------------------------------------------------
-static bool  field_needs_redraw = true;
 static int   prev_ship_x = -1000, prev_ship_y = -1000;
 static bool  prev_ship_alive = false;
 static int   prev_boom_x[BOOM_PARTS], prev_boom_y[BOOM_PARTS];
@@ -582,9 +688,9 @@ static void draw_ship_if_moved(bool alive) {
     if (!alive && !prev_ship_alive) return;
 
     if (prev_ship_alive)
-        redraw_terrain_box(prev_ship_x-SHIP_BBOX_R, prev_ship_y-SHIP_BBOX_R, SHIP_BBOX_R*2, SHIP_BBOX_R*2);
+        erase_box_over_terrain(prev_ship_x-SHIP_BBOX_R, prev_ship_y-SHIP_BBOX_R, SHIP_BBOX_R*2, SHIP_BBOX_R*2);
     if (alive)
-        draw_ship_at(cx, cy, ship_angle, engine_on, COLOR_SHIP);
+        draw_ship_at(cx, cy, ship_angle, engine_on, COLOR_SHIP, 1);
 
     prev_ship_x = cx; prev_ship_y = cy; prev_ship_alive = alive;
     renderer_flush();
@@ -599,7 +705,7 @@ static void draw_boom_if_moved(void) {
         if (!show && !prev_boom_active[i]) continue;
 
         if (prev_boom_active[i])
-            redraw_terrain_box(prev_boom_x[i]-2, prev_boom_y[i]-2, 5, 5);
+            erase_box_over_terrain(prev_boom_x[i]-2, prev_boom_y[i]-2, 5, 5);
         if (show)
             renderer_fill_rect(x-sz/2, y-sz/2, sz, sz, COLOR_BOOM);
 
@@ -610,17 +716,77 @@ static void draw_boom_if_moved(void) {
 }
 
 // ---------------------------------------------------------------------------
+// Modo ZOOM -- redibujado COMPLETO del área de juego cada tick (ver
+// comentario largo junto a ZOOM_ALT_ENTER/EXIT). Terreno, partículas
+// y nave se transforman con world_to_screen() y se pintan en orden
+// fijo (terreno -> partículas -> nave -> HUD encima de todo),
+// exactamente como hacía el renderer del original en CADA frame del
+// juego -- aquí solo durante el tramo final de aterrizaje.
+// ---------------------------------------------------------------------------
+static void draw_terrain_zoomed(void) {
+    int floor_sx, floor_sy;
+    world_to_screen(PLAY_X, PLAY_Y+PLAY_H, &floor_sx, &floor_sy);
+    (void)floor_sx;
+    floor_sy = ll_clamp(floor_sy, PLAY_Y, PLAY_Y+PLAY_H);
+
+    for (int i = 0; i < TERRAIN_SEGS; i++) {
+        int x0w = terrain_x[i],   y0w = terrain_y[i];
+        int x1w = terrain_x[i+1], y1w = terrain_y[i+1];
+        int x0s, y0s, x1s, y1s;
+        world_to_screen(x0w, y0w, &x0s, &y0s);
+        world_to_screen(x1w, y1w, &x1s, &y1s);
+        if (x0s > x1s) { int t=x0s;x0s=x1s;x1s=t; t=y0s;y0s=y1s;y1s=t; }
+        if (x1s <= PLAY_X || x0s >= PLAY_X+PLAY_W) continue;
+
+        bool is_pad = false;
+        for (int p = 0; p < n_pads; p++)
+            if (x0w == pads[p].x0 && x1w == pads[p].x1) is_pad = true;
+        uint16_t col = is_pad ? COLOR_PAD : COLOR_TERRAIN;
+
+        int dx = x1s - x0s;
+        int xs_start = x0s < PLAY_X ? PLAY_X : x0s;
+        int xs_end   = x1s > PLAY_X+PLAY_W ? PLAY_X+PLAY_W : x1s;
+        if (dx <= 0) {
+            int ys = ll_clamp(y0s, PLAY_Y, floor_sy);
+            int h = floor_sy - ys;
+            if (h > 0) renderer_fill_rect(ll_clamp(xs_start, PLAY_X, PLAY_X+PLAY_W-1), ys, 1, h, col);
+            continue;
+        }
+        for (int xs = xs_start; xs < xs_end; xs++) {
+            int t = (xs - x0s) * 256 / dx;
+            t = ll_clamp(t, 0, 256);
+            int ys = y0s + (t*(y1s-y0s))/256;
+            ys = ll_clamp(ys, PLAY_Y, floor_sy);
+            int h = floor_sy - ys;
+            if (h > 0) renderer_fill_rect(xs, ys, 1, h, col);
+        }
+    }
+}
+
+static void draw_boom_zoomed(void) {
+    for (int i = 0; i < BOOM_PARTS; i++) {
+        if (!boom[i].active) continue;
+        int sx, sy;
+        world_to_screen(FP2PX(boom[i].x), FP2PX(boom[i].y), &sx, &sy);
+        int sz = (boom[i].life>15) ? 4 : (boom[i].life>8) ? 3 : 2;
+        if (sx >= PLAY_X && sx < PLAY_X+PLAY_W && sy >= PLAY_Y && sy < PLAY_Y+PLAY_H)
+            renderer_fill_rect(sx-sz/2, sy-sz/2, sz, sz, COLOR_BOOM);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // HUD -- 3 columnas en la franja superior (que queda libre de
 // terreno, ver TERRAIN_Y_MIN), solo redibuja lo que cambia, mismo
 // patrón que draw_hud_if_changed() en asteroids.c.
 // ---------------------------------------------------------------------------
 static absolute_time_t next_hud_refresh;
+static absolute_time_t ready_input_ok_time;   // ver LL_READY en ll_tick()
 
-static void draw_hud_if_changed(void) {
+static void draw_hud_if_changed(bool force_all) {
     char buf[24];
     bool changed = false;
-    bool force = time_reached(next_hud_refresh);
-    if (force) next_hud_refresh = make_timeout_time_ms(700);
+    bool force = force_all || time_reached(next_hud_refresh);
+    if (time_reached(next_hud_refresh)) next_hud_refresh = make_timeout_time_ms(700);
 
     if (score != prev_score || force) {
         renderer_fill_rect(PLAY_X+2, PLAY_Y+3, 90, 14, COLOR_BLACK);
@@ -690,13 +856,37 @@ static void update_bottom_message(const char *target, int scale) {
     renderer_flush();
 }
 
-static void draw_playing_frame(void) {
-    if (field_needs_redraw) draw_field_static();
+static void draw_zoomed_frame(void) {
+    renderer_fill_rect(PLAY_X, PLAY_Y, PLAY_W, PLAY_H, COLOR_BLACK);
+    draw_terrain_zoomed();
+    draw_boom_zoomed();
 
     bool ship_alive = (state == LL_PLAYING || state == LL_LANDED);
-    draw_boom_if_moved();
-    draw_ship_if_moved(ship_alive);
-    draw_hud_if_changed();
+    if (ship_alive) {
+        int sx, sy;
+        world_to_screen(FP2PX(ship_x), FP2PX(ship_y), &sx, &sy);
+        draw_ship_at(sx, sy, ship_angle, engine_on, COLOR_SHIP, 1);
+    }
+    draw_hud_if_changed(true);
+    renderer_flush();
+}
+
+static void draw_playing_frame(void) {
+    if (zoom_active) {
+        draw_zoomed_frame();
+        // El frame completo del modo zoom ya limpió y redibujó TODO el
+        // área de juego, incluida la franja de los mensajes -- fuerza a
+        // que se repinten aunque el texto no haya cambiado respecto al
+        // tick anterior, o quedarían "borrados" por el clear de arriba.
+        prev_center_msg[0] = '\0';
+        prev_bottom_msg[0] = '\0';
+    } else {
+        if (field_needs_redraw) draw_field_static();
+        bool ship_alive = (state == LL_PLAYING || state == LL_LANDED);
+        draw_boom_if_moved();
+        draw_ship_if_moved(ship_alive);
+        draw_hud_if_changed(false);
+    }
 
     bool bon = (blink/15)%2==0;
     const char *center = "";
@@ -714,6 +904,10 @@ static void draw_playing_frame(void) {
         snprintf(bottom, sizeof(bottom), "PULSA PARA CONTINUAR");
     } else if (demo && bon) {
         snprintf(bottom, sizeof(bottom), "DEMO - PULSA PARA JUGAR");
+    } else if (zoom_active && engine_on) {
+        snprintf(bottom, sizeof(bottom), "%s - ZOOM x2", engine_thrust==THRUST_HARD ? "MOTOR MAX" : "MOTOR");
+    } else if (zoom_active) {
+        snprintf(bottom, sizeof(bottom), "ZOOM x2");
     } else if (engine_on) {
         snprintf(bottom, sizeof(bottom), engine_thrust==THRUST_HARD ? "MOTOR MAX" : "MOTOR");
     }
@@ -726,16 +920,28 @@ static void draw_playing_frame(void) {
 // ---------------------------------------------------------------------------
 static void draw_ready_screen(void) {
     renderer_clear(COLOR_BLACK);
-    renderer_draw_text(centered_x("LUNAR LANDER", 3), CY-70, "LUNAR LANDER", COLOR_CYAN, COLOR_BLACK, 3);
-    renderer_draw_text(centered_x("GIRA: orientar nave", 1), CY-25, "GIRA: orientar nave", COLOR_WHITE, COLOR_BLACK, 1);
-    renderer_draw_text(centered_x("BOTON A: empuje suave", 1), CY-10, "BOTON A: empuje suave", COLOR_WHITE, COLOR_BLACK, 1);
-    renderer_draw_text(centered_x("BOTON B: empuje fuerte", 1), CY+5, "BOTON B: empuje fuerte", COLOR_WHITE, COLOR_BLACK, 1);
-    renderer_draw_text(centered_x("PULSA ENCODER: maniobra aterrizaje (cerca del suelo)", 1), CY+20,
-                        "PULSA ENCODER: maniobra aterrizaje (cerca del suelo)", COLOR_WHITE, COLOR_BLACK, 1);
-    renderer_draw_text(centered_x("PLATAFORMA ESTRECHA = MAS PUNTOS", 1), CY+40,
-                        "PLATAFORMA ESTRECHA = MAS PUNTOS", COLOR_WHITE, COLOR_BLACK, 1);
-    renderer_draw_text(centered_x("PULSA CUALQUIER BOTON PARA JUGAR", 1), CY+65,
-                        "PULSA CUALQUIER BOTON PARA JUGAR", COLOR_YELLOW, COLOR_BLACK, 1);
+
+    renderer_draw_text(centered_x("LUNAR LANDER", 3), 4, "LUNAR LANDER", COLOR_CYAN, COLOR_BLACK, 3);
+
+    // Icono grande de la nave (misma geometría vectorial que en el
+    // juego, ampliada x3), con la llama del motor encendida, apoyada
+    // sobre una pequeña franja que hace de "suelo" para reforzar la
+    // temática de aterrizaje.
+    draw_ship_at(CX, 78, 0, true, COLOR_SHIP, 3);
+    renderer_fill_rect(CX-45, 114, 90, 3, COLOR_TERRAIN);
+
+    const char *l1 = "GIRA: ORIENTAR NAVE";
+    const char *l2 = "A: SUAVE   B: FUERTE";
+    const char *l3 = "ENCODER: MANIOBRA";
+    const char *l4 = "MENOS ANCHO = MAS PUNTOS";
+    const char *l5 = "PULSA PARA JUGAR";
+
+    renderer_draw_text(centered_x(l1, 2), 126, l1, COLOR_WHITE,  COLOR_BLACK, 2);
+    renderer_draw_text(centered_x(l2, 2), 148, l2, COLOR_WHITE,  COLOR_BLACK, 2);
+    renderer_draw_text(centered_x(l3, 2), 170, l3, COLOR_WHITE,  COLOR_BLACK, 2);
+    renderer_draw_text(centered_x(l4, 1), 194, l4, COLOR_GREEN,  COLOR_BLACK, 1);
+    renderer_draw_text(centered_x(l5, 2), 212, l5, COLOR_YELLOW, COLOR_BLACK, 2);
+
     prev_bottom_msg[0] = '\0';
     prev_center_msg[0] = '\0';
     renderer_flush();
@@ -775,7 +981,7 @@ static void ll_tick(void) {
 
     if (demo) {
         bool any = controls_menu_select() || controls_get_raw_delta(0) != 0
-                || controls_button_down(PIN_BTN_J1_A) || controls_button_down(PIN_BTN_J1_B);
+                || controls_button_down(BTN_J1_A) || controls_button_down(BTN_J1_B);
         if (any || ++demo_ticks >= TICKS_S * 30) { g_done = true; return; }
     }
 
@@ -783,7 +989,12 @@ static void ll_tick(void) {
 
     // ------------------------------------------------------------------
     case LL_READY:
-        if (controls_menu_select()) {
+        // Ignora pulsaciones durante un breve instante al entrar en la
+        // pantalla de inicio -- evita que una pulsación residual del
+        // botón usado para SELECCIONAR este juego en el menú anterior
+        // salte inmediatamente a la partida antes de que la pantalla
+        // llegue a verse.
+        if (time_reached(ready_input_ok_time) && controls_menu_select()) {
             sound_stop_menu_music();
             game_start();
             reset_render_trace();
@@ -806,23 +1017,27 @@ static void ll_tick(void) {
                 if (steps) { ship_angle = (ship_angle + steps*ROT_SPEED + 360) % 360; enc_acc -= steps*2; }
             }
 
-            int gy = terrain_y_at(FP2PX(ship_x));
-            int alt = gy - (FP2PX(ship_y) + SHIP_RADIUS);
-            if (alt < 0) alt = 0;
-
-            if (controls_button_pressed(PIN_ENC1_SW) && alt < LL_MANEUVER_ALT) {
-                int ang_norm = ((ship_angle%360)+360)%360;
-                bool almost_vertical = (ang_norm<=45 || ang_norm>=315);
-                bool vel_ok = (ll_abs(ship_vx) < 2*FP);
-                if (almost_vertical && vel_ok) {
-                    ship_angle = 0; ship_vx = 0;
-                    maneuver_ticks = MANEUVER_DURATION;
-                    sound_effect_select();
-                }
+            /*
+             * Corregido: antes exigía que la nave YA estuviera casi
+             * vertical y con velocidad horizontal baja para activarse
+             * -- exactamente lo que se supone que la maniobra debe
+             * conseguir, así que casi nunca llegaba a dispararse.
+             * También dependía de zoom_active, así que si el jugador
+             * mantenía pulsado el botón desde antes de entrar en la
+             * zona de zoom, el flanco de pulsación ya se había
+             * consumido y no volvía a detectarse al activarse el
+             * zoom. Ahora: cualquier pulsación del botón durante el
+             * vuelo endereza la nave y anula su velocidad horizontal
+             * al instante (si hay combustible), sin más condiciones.
+             */
+            if (controls_button_pressed(BTN_ENC1_SW) && fuel > 0) {
+                ship_angle = 0; ship_vx = 0;
+                maneuver_ticks = MANEUVER_DURATION;
+                sound_effect_select();
             }
 
-            bool soft = controls_button_down(PIN_BTN_J1_A);
-            bool hard = controls_button_down(PIN_BTN_J1_B);
+            bool soft = controls_button_down(BTN_J1_A);
+            bool hard = controls_button_down(BTN_J1_B);
             engine_on = soft || hard;
             engine_thrust = hard ? THRUST_HARD : THRUST_SOFT;
         }
@@ -860,6 +1075,8 @@ static void ll_tick(void) {
         if (sxp > PLAY_X+PLAY_W)   ship_x = PX2FP(PLAY_X+1);
         if (FP2PX(ship_y) < PLAY_Y) { ship_y = PX2FP(PLAY_Y); ship_vy = 0; }
 
+        update_zoom();
+
         if (ship_on_ground()) {
             int pi = landing_pad_index();
             if (is_safe_landing(pi)) {
@@ -869,12 +1086,14 @@ static void ll_tick(void) {
                 score += pts;
                 fuel = ll_clamp(fuel+pads[pi].fuel_bonus, 0, fuel_start());
                 sound_effect_success();
+                zoom_active = false; field_needs_redraw = true;
                 pause_ticks = 0; state = LL_LANDED;
             } else {
                 spawn_boom(FP2PX(ship_x), FP2PX(ship_y));
                 sound_effect_explosion();
                 lives--;
                 fuel += 200; if (fuel>1500) fuel=1500;
+                zoom_active = false; field_needs_redraw = true;
                 pause_ticks = 0; state = LL_CRASHED;
             }
         }
@@ -942,6 +1161,7 @@ void game_lunar_lander_run(game_mode_t mode) {
         state = LL_READY;
         draw_ready_screen();
         sound_start_menu_music();
+        ready_input_ok_time = make_timeout_time_ms(300);
     }
 
     while (!g_done) {
