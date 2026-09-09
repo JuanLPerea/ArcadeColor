@@ -87,18 +87,62 @@
 // ---------------------------------------------------------------------------
 // Tablero -- 10x20 visibles + 2 filas ocultas arriba para que las
 // piezas puedan aparecer sin recortarse (convencion estandar).
+//
+// Layout nuevo: los DOS tableros (J1 y J2) se ven siempre, uno a cada
+// lado de la pantalla, y ocupan casi todo el alto (240 px). El hueco
+// que queda en medio se usa como columna de HUD: titulo "TETRIS" y,
+// debajo, el marcador de cada jugador (etiqueta, puntuacion, nivel y
+// recuadro con la siguiente pieza). En 1 jugador, el area de J2 (a la
+// derecha) muestra "PULSA PARA JUGAR" en vez de un tablero vacio.
 // ---------------------------------------------------------------------------
 #define BOARD_COLS      10
 #define VISIBLE_ROWS    20
 #define HIDDEN_ROWS      2
 #define BOARD_ROWS      (VISIBLE_ROWS + HIDDEN_ROWS)
-#define CELL_SIZE        8
-#define BOARD_W         (BOARD_COLS   * CELL_SIZE)   // 80
-#define BOARD_H         (VISIBLE_ROWS * CELL_SIZE)   // 160
-#define BOARD_Y         (PLAY_Y + 34)                // deja hueco arriba para el HUD
+#define CELL_SIZE        10                                // era 8: tablero mas grande
+#define BOARD_W         (BOARD_COLS   * CELL_SIZE)         // 100
+#define BOARD_H         (VISIBLE_ROWS * CELL_SIZE)         // 200
+#define BOARD_MARGIN     6                                  // hueco a los bordes izq/dcha
+#define BOARD_Y          18                                 // 18..218 de 240 -> pegado arriba/abajo
+
+// Columna central entre J1 (izquierda) y J2 (derecha).
+#define CENTER_X        (BOARD_MARGIN + BOARD_W)                    // 106
+#define CENTER_W        (SCREEN_W - 2 * (BOARD_MARGIN + BOARD_W))   // 108
+#define CENTER_CX       (CENTER_X + CENTER_W / 2)                   // 160 (== centro pantalla)
 
 #define COLOR_P0  COLOR_CYAN
 #define COLOR_P1  COLOR_YELLOW
+
+// ---------------------------------------------------------------------------
+// HUD de la columna central. Los tamanos de fila son aproximados para
+// una fuente tipo 5x7 -- si en la pantalla real no queda pixel-perfect,
+// basta con retocar estas constantes (todo lo demas se recalcula solo).
+// ---------------------------------------------------------------------------
+#define TITLE_Y            BOARD_Y                // "TETRIS", escala 2
+
+#define HUD_TAG_H           14   // "J1"/"J2", escala 2
+#define HUD_SCORE_H         14   // puntuacion, escala 2
+#define HUD_LEVEL_H          9   // "NIV n" / "FIN", escala 1
+#define HUD_NEXTLBL_H        9   // "SIGUIENTE", escala 1
+#define HUD_ROW_GAP           2
+#define HUD_NEXT_BOX         32   // recuadro con la siguiente pieza
+#define NEXT_BOX_PAD          2
+#define NEXT_SUBCELL        ((HUD_NEXT_BOX - 2 * NEXT_BOX_PAD) / 4)   // 7
+
+#define HUD_BLOCK_H  (HUD_TAG_H + HUD_ROW_GAP + HUD_SCORE_H + HUD_ROW_GAP + \
+                       HUD_LEVEL_H + HUD_ROW_GAP + HUD_NEXTLBL_H + HUD_ROW_GAP + \
+                       HUD_NEXT_BOX)                                  // 86
+
+#define HUD1_Y   (TITLE_Y + 18)                // marcador de J1
+#define HUD2_Y   (HUD1_Y + HUD_BLOCK_H + 4)    // marcador de J2, debajo del de J1
+
+#define HUD_TAG_OFF         0
+#define HUD_SCORE_OFF      (HUD_TAG_OFF     + HUD_TAG_H     + HUD_ROW_GAP)
+#define HUD_LEVEL_OFF      (HUD_SCORE_OFF   + HUD_SCORE_H   + HUD_ROW_GAP)
+#define HUD_NEXTLBL_OFF    (HUD_LEVEL_OFF   + HUD_LEVEL_H   + HUD_ROW_GAP)
+#define HUD_BOX_OFF        (HUD_NEXTLBL_OFF + HUD_NEXTLBL_H + HUD_ROW_GAP)
+
+#define BOTTOM_MSG_Y       (BOARD_Y + BOARD_H + 6)   // debajo de los tableros
 
 // ---------------------------------------------------------------------------
 // Piezas Tetrimino (SRS), wall kicks simplificados -- igual que el original
@@ -407,9 +451,31 @@ static void player_gravity_tick(PlayerState *p, int elapsed_ms) {
 // ---------------------------------------------------------------------------
 // Render
 // ---------------------------------------------------------------------------
+// Texto centrado dentro de un rectangulo arbitrario (no necesariamente
+// el centro de la pantalla) -- se usa para el aviso de J2 en 1 jugador,
+// que cae dentro del area del tablero derecho, no en la columna central.
+static void draw_text_centered_in(int rx, int rw, int y, const char *text, uint16_t color, int scale) {
+    int w = (int)st7789_text_width(text, (uint8_t)scale);
+    int x = rx + (rw - w) / 2;
+    if (x < rx) x = rx;
+    renderer_draw_text(x, y, text, color, COLOR_BLACK, scale);
+}
+
+// Aviso estatico "PULSA PARA JUGAR" que ocupa el area de J2 cuando la
+// partida es de 1 jugador (en vez de dejar el tablero vacio).
+static void draw_p2_placeholder(void) {
+    int bx = board_x[1];
+    int cy = BOARD_Y + BOARD_H / 2;
+    draw_text_centered_in(bx, BOARD_W, cy - 26, "PULSA",  COLOR_WHITE, 2);
+    draw_text_centered_in(bx, BOARD_W, cy - 4,  "PARA",   COLOR_WHITE, 2);
+    draw_text_centered_in(bx, BOARD_W, cy + 18, "JUGAR",  COLOR_WHITE, 2);
+}
+
 static void draw_field_static(void) {
     renderer_clear(COLOR_BLACK);
-    for (int p = 0; p < num_players; p++) {
+
+    // Los dos tableros se dibujan siempre, jueguen o no los dos.
+    for (int p = 0; p < 2; p++) {
         int bx = board_x[p];
         renderer_fill_rect(bx-1,        BOARD_Y-1,        BOARD_W+2, 1, COLOR_WHITE);
         renderer_fill_rect(bx-1,        BOARD_Y+BOARD_H,  BOARD_W+2, 1, COLOR_WHITE);
@@ -417,6 +483,23 @@ static void draw_field_static(void) {
         renderer_fill_rect(bx+BOARD_W,  BOARD_Y-1,        1, BOARD_H+2, COLOR_WHITE);
         memset(pl[p].visual_prev, -1, sizeof(pl[p].visual_prev));
     }
+
+    // Columna central: titulo + separadores.
+    renderer_draw_text(centered_x("TETRIS", 2), TITLE_Y, "TETRIS", COLOR_CYAN, COLOR_BLACK, 2);
+    renderer_fill_rect(CENTER_X, HUD1_Y - 4, CENTER_W, 1, COLOR_WHITE);
+    renderer_fill_rect(CENTER_X, HUD1_Y + HUD_BLOCK_H + 2, CENTER_W, 1, COLOR_WHITE);
+
+    // Etiquetas fijas de cada jugador (no cambian durante la partida).
+    renderer_draw_text(centered_x("J1", 2), HUD1_Y + HUD_TAG_OFF, "J1", COLOR_P0, COLOR_BLACK, 2);
+    renderer_draw_text(centered_x("SIGUIENTE", 1), HUD1_Y + HUD_NEXTLBL_OFF, "SIGUIENTE", COLOR_WHITE, COLOR_BLACK, 1);
+
+    if (num_players == 2) {
+        renderer_draw_text(centered_x("J2", 2), HUD2_Y + HUD_TAG_OFF, "J2", COLOR_P1, COLOR_BLACK, 2);
+        renderer_draw_text(centered_x("SIGUIENTE", 1), HUD2_Y + HUD_NEXTLBL_OFF, "SIGUIENTE", COLOR_WHITE, COLOR_BLACK, 1);
+    } else {
+        draw_p2_placeholder();
+    }
+
     prev_score_hud[0] = prev_score_hud[1] = -1;
     prev_level_hud[0] = prev_level_hud[1] = -1;
     prev_next_hud[0]  = prev_next_hud[1]  = -1;
@@ -462,38 +545,48 @@ static void draw_board_if_changed(PlayerState *p, int idx) {
     if (changed) renderer_flush();
 }
 
-static void draw_next_preview(int piece, int x, int y) {
+static void draw_next_preview(int piece, int box_x, int box_y) {
     for (int r = 0; r < 4; r++)
         for (int c = 0; c < 4; c++)
-            renderer_fill_rect(x + c*3, y + r*3, 3, 3,
+            renderer_fill_rect(box_x + NEXT_BOX_PAD + c*NEXT_SUBCELL,
+                                box_y + NEXT_BOX_PAD + r*NEXT_SUBCELL,
+                                NEXT_SUBCELL, NEXT_SUBCELL,
                                 piece_cell(piece, 0, r, c) ? PIECE_COLORS[piece] : COLOR_BLACK);
 }
 
+// HUD de un jugador, dibujado en la columna central (no en su tablero):
+// puntuacion, nivel y recuadro con la siguiente pieza.
 static void draw_hud_if_changed(int idx) {
     PlayerState *p = &pl[idx];
-    int bx = board_x[idx];
+    int hy = (idx == 0) ? HUD1_Y : HUD2_Y;
     uint16_t color = idx == 0 ? COLOR_P0 : COLOR_P1;
     char buf[16];
     bool changed = false;
 
     if (p->active != prev_active_hud[idx] || prev_next_hud[idx] != p->next_piece) {
-        renderer_fill_rect(bx, PLAY_Y+2, 14, 14, COLOR_BLACK);
-        if (p->active) draw_next_preview(p->next_piece, bx, PLAY_Y+2);
+        int box_x = CENTER_CX - HUD_NEXT_BOX/2;
+        int box_y = hy + HUD_BOX_OFF;
+        renderer_fill_rect(box_x-1, box_y-1,            HUD_NEXT_BOX+2, 1, COLOR_WHITE);
+        renderer_fill_rect(box_x-1, box_y+HUD_NEXT_BOX,  HUD_NEXT_BOX+2, 1, COLOR_WHITE);
+        renderer_fill_rect(box_x-1, box_y-1,             1, HUD_NEXT_BOX+2, COLOR_WHITE);
+        renderer_fill_rect(box_x+HUD_NEXT_BOX, box_y-1,  1, HUD_NEXT_BOX+2, COLOR_WHITE);
+        renderer_fill_rect(box_x, box_y, HUD_NEXT_BOX, HUD_NEXT_BOX, COLOR_BLACK);
+        if (p->active) draw_next_preview(p->next_piece, box_x, box_y);
         prev_next_hud[idx] = p->next_piece;
         changed = true;
     }
     if ((int)p->score != prev_score_hud[idx] || p->active != prev_active_hud[idx]) {
-        renderer_fill_rect(bx+18, PLAY_Y+2, BOARD_W-18, 9, COLOR_BLACK);
+        renderer_fill_rect(CENTER_X, hy + HUD_SCORE_OFF, CENTER_W, HUD_SCORE_H, COLOR_BLACK);
         snprintf(buf, sizeof(buf), "%u", p->score);
-        renderer_draw_text(bx+18, PLAY_Y+2, buf, color, COLOR_BLACK, 1);
+        renderer_draw_text(centered_x(buf, 2), hy + HUD_SCORE_OFF, buf, color, COLOR_BLACK, 2);
         prev_score_hud[idx] = (int)p->score;
         changed = true;
     }
     if (p->level != prev_level_hud[idx] || p->active != prev_active_hud[idx]) {
-        renderer_fill_rect(bx+18, PLAY_Y+12, BOARD_W-18, 9, COLOR_BLACK);
+        renderer_fill_rect(CENTER_X, hy + HUD_LEVEL_OFF, CENTER_W, HUD_LEVEL_H, COLOR_BLACK);
         if (p->active) snprintf(buf, sizeof(buf), "NIV %d", p->level);
         else            snprintf(buf, sizeof(buf), "FIN");
-        renderer_draw_text(bx+18, PLAY_Y+12, buf, COLOR_WHITE, COLOR_BLACK, 1);
+        renderer_draw_text(centered_x(buf, 1), hy + HUD_LEVEL_OFF, buf, COLOR_WHITE, COLOR_BLACK, 1);
         prev_level_hud[idx] = p->level;
         changed = true;
     }
@@ -514,9 +607,9 @@ static void update_center_message(const char *target, uint16_t color, int scale)
 
 static void update_bottom_message(const char *target, int scale) {
     if (strcmp(target, prev_bottom_msg) == 0) return;
-    renderer_fill_rect(0, PLAY_Y+PLAY_H-18, TFT_WIDTH, 16, COLOR_BLACK);
+    renderer_fill_rect(0, BOTTOM_MSG_Y - 2, TFT_WIDTH, 16, COLOR_BLACK);
     if (target[0]) {
-        renderer_draw_text(centered_x(target, scale), PLAY_Y+PLAY_H-16, target, COLOR_WHITE, COLOR_BLACK, scale);
+        renderer_draw_text(centered_x(target, scale), BOTTOM_MSG_Y, target, COLOR_WHITE, COLOR_BLACK, scale);
     }
     strncpy(prev_bottom_msg, target, sizeof(prev_bottom_msg) - 1);
     prev_bottom_msg[sizeof(prev_bottom_msg) - 1] = '\0';
@@ -583,12 +676,10 @@ static void player_reset(PlayerState *p) {
 }
 
 static void start_game(void) {
-    if (num_players == 2) {
-        board_x[0] = PLAY_X + 6;
-        board_x[1] = PLAY_X + PLAY_W - 6 - BOARD_W;
-    } else {
-        board_x[0] = CX - BOARD_W/2;
-    }
+    // Los dos huecos de tablero (J1 izquierda, J2 derecha) son fijos ahora:
+    // ambos se ven siempre, se juegue con 1 o 2 jugadores.
+    board_x[0] = BOARD_MARGIN;
+    board_x[1] = SCREEN_W - BOARD_MARGIN - BOARD_W;
     for (int p = 0; p < 2; p++) {
         if (p < num_players) player_reset(&pl[p]);
         else                 pl[p].active = false;
