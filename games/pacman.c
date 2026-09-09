@@ -324,6 +324,7 @@ static uint8_t g_prev_rotation;   // rotación a restaurar al salir
 #define T_DEAD_W    (1*TICKS_S)
 #define T_READY     (1*TICKS_S)
 #define T_LEVELUP   (1*TICKS_S)
+#define T_GAMEOVER  (1*TICKS_S)
 
 #define PTS_DOT    10
 #define PTS_POWER  50
@@ -515,19 +516,63 @@ static void level_init(void) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// IA de fantasmas (idéntica al original)
+// IA de fantasmas
 // ─────────────────────────────────────────────────────────────────────────────
 #define absi(x)       ((x) < 0 ? -(x) : (x))
 #define manh(ac,ar,bc,br) (absi((ac)-(bc)) + absi((ar)-(br)))
 
+// Distancia REAL por el laberinto (BFS) desde el objetivo (tc,tr) a cada
+// celda alcanzable, respetando paredes/puerta -- best_towards() usaba
+// antes solo la distancia en línea recta (Manhattan) al candidato, que
+// ignora las paredes por completo salvo el paso inmediato. Eso es fiel
+// al comportamiento del arcade original (que se diseñó SOBRE ese laberinto
+// concreto sabiendo que el atajo funcionaría), pero en un laberinto propio
+// hace que el fantasma elija a menudo un paso que "en línea recta" parece
+// acercarlo pero en realidad lleva a un callejón sin salida o a un rodeo
+// más largo -- se ve como si evitase a Pac-Man en vez de perseguirlo. Con
+// BFS el fantasma siempre elige el paso que de verdad acorta el camino.
+static int16_t bfs_dist[MAP_ROWS][MAP_COLS];
+static void bfs_from(int tc, int tr, bool door) {
+    for (int r=0;r<MAP_ROWS;r++)
+        for (int c=0;c<MAP_COLS;c++)
+            bfs_dist[r][c] = -1;
+    if (tc<0||tc>=MAP_COLS||tr<0||tr>=MAP_ROWS) return;
+
+    static int8_t qc[MAP_ROWS*MAP_COLS], qr[MAP_ROWS*MAP_COLS];
+    int head=0, tail=0;
+    bfs_dist[tr][tc]=0;
+    qc[tail]=(int8_t)tc; qr[tail]=(int8_t)tr; tail++;
+
+    static const Dir P4[4]={DIR_UP,DIR_DOWN,DIR_LEFT,DIR_RIGHT};
+    while (head<tail) {
+        int8_t c=qc[head], r=qr[head]; head++;
+        int16_t d = bfs_dist[r][c];
+        for (int k=0;k<4;k++) {
+            int8_t nc=(int8_t)(c+DX[P4[k]]), nr=(int8_t)(r+DY[P4[k]]);
+            tunnel_wrap(&nc,nr);
+            if (nc<0||nc>=MAP_COLS||nr<0||nr>=MAP_ROWS) continue;
+            if (!ghost_ok(nc,nr,door)) continue;
+            if (bfs_dist[nr][nc] != -1) continue;
+            bfs_dist[nr][nc] = (int16_t)(d+1);
+            qc[tail]=nc; qr[tail]=nr; tail++;
+        }
+    }
+}
+
 static Dir best_towards(int8_t fc,int8_t fr,int tc,int tr,Dir from,bool door) {
     static const Dir P[4]={DIR_UP,DIR_LEFT,DIR_DOWN,DIR_RIGHT};
+    bfs_from(tc, tr, door);
     Dir best=DIR_NONE; int bd=99999;
     for (int i=0;i<4;i++) {
         Dir d=P[i]; if(d==opp(from)) continue;
         int8_t nc=fc+DX[d], nr=fr+DY[d]; tunnel_wrap(&nc,nr);
         if (!ghost_ok(nc,nr,door)) continue;
-        int dist=manh(nc,nr,tc,tr);
+        int dist = bfs_dist[nr][nc];
+        // El objetivo puede quedar temporalmente inalcanzable por este
+        // lado de una puerta (p.ej. en GM_LEAVING antes de cruzarla) --
+        // en ese caso, línea recta como último recurso en vez de tratar
+        // "inalcanzable" como si fuera la mejor opción.
+        if (dist<0) dist = manh(nc,nr,tc,tr) + 1000;
         if (dist<bd){bd=dist;best=d;}
     }
     return best==DIR_NONE?opp(from):best;
@@ -635,7 +680,8 @@ static void ghost_step(int i) {
     if (g->mode == GM_LEAVING) {
         int tc=9, tr=8;
         if (col==tc && row<=tr){
-            g->mode=GM_SCATTER; g->dir=DIR_LEFT;
+            g->mode = scatter_phase ? GM_SCATTER : GM_CHASE;
+            g->dir=DIR_LEFT;
             g->tx=col_to_px(col); g->ty=row_to_py(row);
             return;
         }
@@ -1227,21 +1273,14 @@ static void draw_frame(void) {
     }
 
     case PM_GAMEOVER:
-        renderer_draw_text(centered_x("GAME OVER",2), 90, "GAME OVER", COLOR_RED, COLOR_BLACK, 2);
-        if (two_player) {
-            char b1[24], b2[24];
-            snprintf(b1,sizeof(b1),"J1: %d pts", score);
-            snprintf(b2,sizeof(b2),"J2: %d pts", score2);
-            renderer_draw_text(centered_x(b1,1), 130, b1, COLOR_YELLOW, COLOR_BLACK, 1);
-            renderer_draw_text(centered_x(b2,1), 145, b2, COLOR_GREEN, COLOR_BLACK, 1);
-            const char *w = (score>score2) ? "GANA J1!" : (score2>score) ? "GANA J2!" : "EMPATE!";
-            renderer_draw_text(centered_x(w,2), 165, w, COLOR_WHITE, COLOR_BLACK, 2);
-        } else {
-            char b[24]; snprintf(b,sizeof(b),"PUNTOS: %d",score);
-            renderer_draw_text(centered_x(b,2), 140, b, COLOR_WHITE, COLOR_BLACK, 2);
+        draw_map(); draw_ghosts(); draw_hud();
+        if (bon) {
+            renderer_draw_text(centered_x("GAME OVER",2), CELL_CY(11)-7, "GAME OVER", COLOR_RED, COLOR_BLACK, 2);
+            if (two_player) {
+                const char *w = (score>score2) ? "P1 WIN!" : (score2>score) ? "P2 WIN!" : "EMPATE!";
+                renderer_draw_text(centered_x(w,1), CELL_CY(11)+16, w, COLOR_WHITE, COLOR_BLACK, 1);
+            }
         }
-        if (bon)
-            renderer_draw_text(centered_x("Pulsa para continuar",1), 250, "Pulsa para continuar", COLOR_WHITE, COLOR_BLACK, 1);
         return;
 
     case PM_SCORES: {
@@ -1371,21 +1410,7 @@ static void pm_tick(void) {
                 } else {
                     if (!pac.alive && lives <= 0) {
                         sound_stop_pacman_intro();
-                        if (!demo_mode) {
-                            // highscores_enter() está pensada para la rotación
-                            // estándar (apaisada) que usan el resto de juegos,
-                            // no para el rotation=0 vertical de Pac-Man -- ver
-                            // nota 8) en la cabecera del archivo.
-                            st7789_set_rotation(1);
-                            renderer_clear(COLOR_BLACK);
-                            renderer_flush();
-                            if (highscores_is_top(PM_GAME_ID,(uint32_t)score))  highscores_enter(PM_GAME_ID,(uint32_t)score);
-                            if (two_player && highscores_is_top(PM_GAME_ID,(uint32_t)score2)) highscores_enter(PM_GAME_ID,(uint32_t)score2);
-                            st7789_set_rotation(0);
-                            renderer_clear(COLOR_BLACK);
-                            renderer_flush();
-                        }
-                        state=PM_GAMEOVER; pause_cnt=TICKS_S*1;
+                        state=PM_GAMEOVER; pause_cnt=T_GAMEOVER;
                     }
                 }
             }
@@ -1423,18 +1448,7 @@ static void pm_tick(void) {
 
             if (j1_out && j2_out) {
                 sound_stop_pacman_intro();
-                if (!demo_mode) {
-                    // Ver nota 8) en la cabecera del archivo.
-                    st7789_set_rotation(1);
-                    renderer_clear(COLOR_BLACK);
-                    renderer_flush();
-                    if (highscores_is_top(PM_GAME_ID,(uint32_t)score))  highscores_enter(PM_GAME_ID,(uint32_t)score);
-                    if (two_player && highscores_is_top(PM_GAME_ID,(uint32_t)score2)) highscores_enter(PM_GAME_ID,(uint32_t)score2);
-                    st7789_set_rotation(0);
-                    renderer_clear(COLOR_BLACK);
-                    renderer_flush();
-                }
-                state=PM_GAMEOVER; pause_cnt=TICKS_S*1;
+                state=PM_GAMEOVER; pause_cnt=T_GAMEOVER;
             } else {
                 if (j1_died) {
                     if (lives > 0) pac_reset();
@@ -1461,16 +1475,21 @@ static void pm_tick(void) {
 
     case PM_GAMEOVER:
         if (controls_menu_select() || --pause_cnt<=0) {
-            state=PM_SCORES; pause_cnt=0;
-            // highscores_draw() se llama cada frame mientras dure este
-            // estado; se cambia la rotación una sola vez aquí (no en
-            // draw_frame(), que corre cada tick) -- ver nota 8) en la
-            // cabecera. No hace falta deshacerlo: es la última pantalla
-            // antes de salir, y game_pacman_run() ya restaura
-            // rotation=1 al terminar el bucle.
+            // Se pasa a horizontal aquí: tanto la introducción de
+            // iniciales como la tabla de récords están pensadas para
+            // la rotación estándar del resto de juegos, no para el
+            // rotation=0 vertical de Pac-Man -- ver nota 8) en la
+            // cabecera. No hace falta volver a rotation=0 después: es
+            // la última pantalla antes de salir, y game_pacman_run()
+            // ya restaura rotation=1 al terminar el bucle.
             st7789_set_rotation(1);
             renderer_clear(COLOR_BLACK);
             renderer_flush();
+            if (!demo_mode) {
+                if (highscores_is_top(PM_GAME_ID,(uint32_t)score))  highscores_enter(PM_GAME_ID,(uint32_t)score);
+                if (two_player && highscores_is_top(PM_GAME_ID,(uint32_t)score2)) highscores_enter(PM_GAME_ID,(uint32_t)score2);
+            }
+            state=PM_SCORES; pause_cnt=0;
         }
         if (demo_mode && pause_cnt<=0) g_done=true;
         break;
