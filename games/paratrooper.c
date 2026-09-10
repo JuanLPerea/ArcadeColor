@@ -177,7 +177,7 @@ static inline int16_t can_dy(int a) { return -cos_deg(a); }
 
 #define ATTACK_DUR         (TICKS_S * 6)
 #define ATTACK_INTERVAL    (TICKS_S * 20)
-#define DROP_PROB_ATTACK   1
+#define DROP_PROB_ATTACK   3
 
 // ---------------------------------------------------------------------------
 // Cañón
@@ -265,7 +265,7 @@ static PtState state;
 static int     blink;
 static bool    demo_mode;
 static int     pause_cnt, demo_ticks;
-static int     score, lives, wave;
+static int     score, wave;
 static bool    g_done;
 
 // Cañón
@@ -415,16 +415,20 @@ static void draw_chute_filled(int cx, int cy, int rw, int rh, uint16_t color) {
 }
 
 // ---------------------------------------------------------------------------
-// Colores
+// Colores -- paleta CGA de 4 colores (negro/cian/magenta/blanco), como
+// en el original: torreta base blanca + cañón cian, helicópteros cuerpo
+// blanco + detalles magenta, avión cian.
 // ---------------------------------------------------------------------------
-#define COLOR_TURRET  COLOR_GREEN
-#define COLOR_HELI    COLOR_RED
-#define COLOR_SOLDIER COLOR_WHITE
-#define COLOR_CHUTE   COLOR_CYAN
-#define COLOR_JET     COLOR_RED
-#define COLOR_BOMB    COLOR_YELLOW
-#define COLOR_BULLET  COLOR_WHITE
-#define COLOR_PART    COLOR_YELLOW
+#define COLOR_TURRET_BASE  COLOR_WHITE
+#define COLOR_TURRET_GUN   COLOR_CYAN
+#define COLOR_HELI_BODY    COLOR_WHITE
+#define COLOR_HELI_ACCENT  COLOR_MAGENTA
+#define COLOR_SOLDIER      COLOR_WHITE
+#define COLOR_CHUTE        COLOR_CYAN
+#define COLOR_JET          COLOR_CYAN
+#define COLOR_BOMB         COLOR_MAGENTA
+#define COLOR_BULLET       COLOR_WHITE
+#define COLOR_PART         COLOR_MAGENTA
 
 // ---------------------------------------------------------------------------
 // Gestión de ranuras y torre
@@ -504,7 +508,7 @@ static void reset_wave(void) {
 }
 
 static void game_start(void) {
-    score=0; lives=3; wave=1;
+    score=0; wave=1;
     cannon_angle_deg=ANGLE_UP_DEG; cannon_rot_dir=0;
     cannon_alive=true; cannon_inv=TICKS_S*2; cannon_enc_acc=0;
     fire_held=false;
@@ -611,9 +615,19 @@ static void update_helis(void) {
         if (hx < PLAY_X-60 || hx > PLAY_X+PLAY_W+60) { h->active=false; continue; }
         if (!tower_active && !wave_done && cannon_alive) {
             if (--h->drop_timer <= 0) {
+                /*
+                 * Antes, en modo ataque DROP_PROB_ATTACK=1 hacía que CADA
+                 * helicóptero soltara un paracaidista con un 100% de
+                 * probabilidad cada 0.5-1s -- con varios helis a la vez
+                 * eso los tiraba casi todos de golpe. Ahora el intervalo
+                 * de comprobación es más corto (más a menudo se decide si
+                 * toca soltar), pero la probabilidad real de soltar en
+                 * cada comprobación es baja, así que en la práctica caen
+                 * uno a uno, repartidos en el tiempo, en vez de en racha.
+                 */
                 int base_interval = attack_mode
-                    ? (TICKS_S/2 + rnd(TICKS_S/2))
-                    : (TICKS_S*2 + rnd(TICKS_S*3));
+                    ? (TICKS_S/3 + rnd(TICKS_S/3))
+                    : (TICKS_S*2 + rnd(TICKS_S*2));
                 h->drop_timer = base_interval;
                 int prob = attack_mode ? DROP_PROB_ATTACK : DROP_PROB;
                 if (rnd(prob) == 0) {
@@ -636,10 +650,10 @@ static void update_paras(void) {
         if (p->chute_shot) {
             p->vy += PX2FP(1)/3; if (p->vy > PX2FP(6)) p->vy = PX2FP(6);
         } else if (p->chute_open) {
-            p->vy = PX2FP(1);
+            p->vy = FP*3/4;   // antes 1px/tick (FP) -- ahora 0.75px/tick, más fácil de acertar
         } else {
-            p->vy += PX2FP(1)/4; if (p->vy > PX2FP(4)) p->vy = PX2FP(4);
-            if (FP2PX(p->y) >= p->chute_open_y) { p->chute_open = true; p->vy = PX2FP(1); }
+            p->vy += PX2FP(1)/6; if (p->vy > PX2FP(3)) p->vy = PX2FP(3);
+            if (FP2PX(p->y) >= p->chute_open_y) { p->chute_open = true; p->vy = FP*3/4; }
         }
         p->y += p->vy * g_dt_scale / FP;
 
@@ -798,6 +812,25 @@ static void update_tower(void) {
 // ---------------------------------------------------------------------------
 #define BOMB_DROP_DELAY  30
 
+/*
+ * Ticks (nominales) que le quedan a la bomba hasta tocar el suelo,
+ * dado su estado vertical actual. Se usa tanto al lanzarla como, cada
+ * tick, para RECALCULAR la vx necesaria -- así el impacto siempre cae
+ * justo en TURRET_X sin importar que el dt real fluctúe de un tick a
+ * otro (antes se calculaba una vez al lanzar asumiendo un tick nominal
+ * fijo, y con el dt real variable el número de ticks reales hasta
+ * tocar el suelo no coincidía con el planeado, así que la bomba caía
+ * a un lado u otro de la torreta en vez de encima).
+ */
+static int bomb_ticks_to_ground(int32_t y, int32_t vy, int32_t ay) {
+    int32_t sim_vy=vy, sim_y=y;
+    for (int t=1; t<=500; t++) {
+        sim_vy += ay; sim_y += sim_vy;
+        if (FP2PX(sim_y) >= GROUND_Y) return t;
+    }
+    return 500;
+}
+
 static void update_plane(void) {
     if (!plane.active) return;
     plane.anim_timer++; if (plane.anim_timer>=3) plane.anim_timer=0;
@@ -810,13 +843,13 @@ static void update_plane(void) {
                 if (bombs[bi].active) continue;
                 int32_t bx = plane.x;
                 int32_t by = plane.y + PX2FP(6);
-                int32_t vy0 = FP/5, ay = FP/18;
-                int32_t sim_vy=vy0, sim_y=by;
-                int tof = 1;
-                for (int t=1; t<=300; t++) {
-                    sim_vy += ay; sim_y += sim_vy;
-                    if (FP2PX(sim_y) >= GROUND_Y) { tof=t; break; }
-                }
+                /*
+                 * Caída lenta a propósito (antes tardaba ~1.8s en tocar
+                 * el suelo, sin apenas margen para dispararle; ahora
+                 * tarda ~3s) para que dé tiempo real a acertarla.
+                 */
+                int32_t vy0 = 14, ay = 3;
+                int tof = bomb_ticks_to_ground(by, vy0, ay);
                 int32_t vx = (PX2FP(TURRET_X) - bx) / tof;
                 bombs[bi].active=true;
                 bombs[bi].x=bx; bombs[bi].y=by;
@@ -833,6 +866,11 @@ static void update_plane(void) {
 static void update_bombs(void) {
     for (int i=0;i<MAX_BOMBS;i++) {
         Bomb *b = &bombs[i]; if (!b->active) continue;
+
+        int rem = bomb_ticks_to_ground(b->y, b->vy, b->ay);
+        if (rem < 1) rem = 1;
+        b->vx = (PX2FP(TURRET_X) - b->x) / rem;
+
         b->vy += b->ay;
         b->x  += b->vx * g_dt_scale / FP;
         b->y  += b->vy * g_dt_scale / FP;
@@ -876,23 +914,26 @@ static void check_collisions(void) {
             Para *p = &paras[i];
             if (!p->active || p->landed || p->chute_shot) continue;
             int px=FP2PX(p->x), py=FP2PX(p->y);
-            if (p->chute_open) {
-                if (chit(bx,by,3,px,py-9,8)) {
-                    bu->active=false; p->chute_open=false; p->chute_shot=true;
-                    p->vy=PX2FP(2); score+=PTS_PARA_CHUTE_HIT;
-                    sound_effect_explosion(); break;
-                }
-                if (chit(bx,by,3,px,py,3)) {
-                    bu->active=p->active=false;
-                    spawn_expl(px,py,5,3,14);
-                    score+=PTS_PARA_AIR; sound_effect_explosion(); break;
-                }
-            } else {
-                if (chit(bx,by,3,px,py,3)) {
-                    bu->active=p->active=false;
-                    spawn_expl(px,py,5,3,14);
-                    score+=PTS_PARA_AIR; sound_effect_explosion(); break;
-                }
+            /*
+             * Dos hitboxes bien separadas (antes se solapaban casi del
+             * todo y en la práctica siempre "ganaba" el dosel):
+             *  - Dosel: solo existe con chute_open, centrado en el propio
+             *    dosel (py-10, arriba del cuerpo) -- acertarlo solo corta
+             *    las cuerdas (chute_shot=true), no mata.
+             *  - Soldado: centrado en el cuerpo que cuelga (py+SOLDIER_H/2,
+             *    la posición real donde se dibuja con draw_soldier_at),
+             *    tanto con el dosel abierto como en caída libre -- acertarlo
+             *    mata directamente.
+             */
+            if (p->chute_open && chit(bx,by,3, px,py-10,8)) {
+                bu->active=false; p->chute_open=false; p->chute_shot=true;
+                p->vy=PX2FP(2); score+=PTS_PARA_CHUTE_HIT;
+                sound_effect_explosion(); break;
+            }
+            if (chit(bx,by,3, px,py+SOLDIER_H/2, SOLDIER_H/2+3)) {
+                bu->active=p->active=false;
+                spawn_expl(px,py+SOLDIER_H/2,5,3,14);
+                score+=PTS_PARA_AIR; sound_effect_explosion(); break;
             }
         }
         if (!bu->active) continue;
@@ -958,15 +999,15 @@ static bool wave_clear(void) {
 // ---------------------------------------------------------------------------
 // DRAW: primitivas de entidades
 // ---------------------------------------------------------------------------
-static void draw_turret(uint16_t color) {
+static void draw_turret(void) {
     if (!cannon_alive) return;
     if (cannon_inv>0 && (cannon_inv/4)%2==0) return;
 
     int tx=TURRET_X, ty=TURRET_Y;
     int base_top = ty - BASE_H;
 
-    renderer_fill_rect(tx-BASE_W/2, base_top, BASE_W, BASE_H, color);
-    fill_top_ellipse(tx, base_top, BODY_RX, BODY_RY, color);
+    renderer_fill_rect(tx-BASE_W/2, base_top, BASE_W, BASE_H, COLOR_TURRET_BASE);
+    fill_top_ellipse(tx, base_top, BODY_RX, BODY_RY, COLOR_TURRET_BASE);
     renderer_fill_rect(tx-1, base_top-BODY_RY+2, 2, 2, COLOR_BLACK);
 
     int dx2=can_dx(cannon_angle_deg), dy2=can_dy(cannon_angle_deg);
@@ -975,41 +1016,41 @@ static void draw_turret(uint16_t color) {
     for (int t=-CANNON_W; t<=CANNON_W; t++) {
         int ox = (int)(t*(-dy2)/256);
         int oy = (int)(t*( dx2)/256);
-        line(CANNON_OX+ox, CANNON_OY+oy, tip_x+ox, tip_y+oy, color);
+        line(CANNON_OX+ox, CANNON_OY+oy, tip_x+ox, tip_y+oy, COLOR_TURRET_GUN);
     }
 }
 
 #define HELI_RX 11
 #define HELI_RY 5
 
-static void draw_heli(const Heli *h, uint16_t color) {
+static void draw_heli(const Heli *h) {
     if (!h->active) return;
     int cx=FP2PX(h->x), cy=h->y;
     int d = (h->vx>=0) ? 1 : -1;
 
-    fill_ellipse(cx, cy, HELI_RX, HELI_RY, color);
+    fill_ellipse(cx, cy, HELI_RX, HELI_RY, COLOR_HELI_BODY);
     // hueco de cabina (marca la dirección de la nariz)
     renderer_fill_rect(cx + d*(HELI_RX-4), cy-1, 3, 3, COLOR_BLACK);
 
     int tail_len = 8;
     int tail_x = (d>0) ? (cx-HELI_RX-tail_len) : (cx+HELI_RX);
-    renderer_fill_rect(tail_x, cy-1, tail_len, 2, color);
+    renderer_fill_rect(tail_x, cy-1, tail_len, 2, COLOR_HELI_ACCENT);
     int mast_x = (d>0) ? (tail_x-1) : (tail_x+tail_len);
 
     if ((h->tail_frame & 1)==0)
-        renderer_fill_rect(mast_x-3, cy-1, 7, 1, color);
+        renderer_fill_rect(mast_x-3, cy-1, 7, 1, COLOR_HELI_ACCENT);
     else
-        renderer_fill_rect(mast_x, cy-4, 1, 7, color);
+        renderer_fill_rect(mast_x, cy-4, 1, 7, COLOR_HELI_ACCENT);
 
     int mx = cx + d;
-    renderer_fill_rect(mx-1, cy-HELI_RY-3, 2, 3, color);
+    renderer_fill_rect(mx-1, cy-HELI_RY-3, 2, 3, COLOR_HELI_ACCENT);
     static const int8_t RL[4] = {10,7,4,1};
     int rl = RL[h->rotor_frame & 3];
-    renderer_fill_rect(mx-rl, cy-HELI_RY-4, 2*rl+1, 1, color);
+    renderer_fill_rect(mx-rl, cy-HELI_RY-4, 2*rl+1, 1, COLOR_HELI_ACCENT);
 
-    renderer_fill_rect(cx-HELI_RX+2, cy+HELI_RY,   2, 4, color);
-    renderer_fill_rect(cx+HELI_RX-4, cy+HELI_RY,   2, 4, color);
-    renderer_fill_rect(cx-HELI_RX,   cy+HELI_RY+4, 2*HELI_RX, 2, color);
+    renderer_fill_rect(cx-HELI_RX+2, cy+HELI_RY,   2, 4, COLOR_HELI_ACCENT);
+    renderer_fill_rect(cx+HELI_RX-4, cy+HELI_RY,   2, 4, COLOR_HELI_ACCENT);
+    renderer_fill_rect(cx-HELI_RX,   cy+HELI_RY+4, 2*HELI_RX, 2, COLOR_HELI_ACCENT);
 }
 
 // Soldado, pies en py. walking anima las piernas (marcha/escalada).
@@ -1086,12 +1127,20 @@ static PrevPos prev_para[MAX_PARAS];
 static PrevPos prev_bomb[MAX_BOMBS];
 static PrevPos prev_plane_pos = { .active=false };
 static PrevPos prev_turret = { .active=false };
+static bool    prev_tower_region_active = false;
 static bool    field_needs_redraw = true;
-static int     prev_score = -1, prev_lives = -1, prev_wave = -1;
+static int     prev_score = -1, prev_wave = -1;
 static char    prev_center_msg[24] = "";
 static char    prev_bottom_msg[40] = "";
 
-#define HELI_BOX_HW  (HELI_RX+3)
+/*
+ * HELI_BOX_HW tiene que cubrir no solo el fuselaje (HELI_RX) sino la
+ * cola completa: tail_len(8) + 1px de separación del mástil + el brazo
+ * de la hélice de cola (3px a cada lado) = HELI_RX+8+1+3 = HELI_RX+12
+ * en el peor caso. Antes era solo HELI_RX+3 -- por eso la hélice de
+ * cola se quedaba sin borrar y dejaba un rastro al moverse.
+ */
+#define HELI_BOX_HW  (HELI_RX+14)
 #define HELI_BOX_UP  (HELI_RY+8)
 #define HELI_BOX_DN  (HELI_RY+8)
 #define PARA_BOX_HW  12
@@ -1117,7 +1166,8 @@ static void reset_render_trace(void) {
     for (int i=0;i<MAX_BOMBS;i++) prev_bomb[i].active=false;
     prev_plane_pos.active=false;
     prev_turret.active=false;
-    prev_score=prev_lives=prev_wave=-1;
+    prev_tower_region_active=false;
+    prev_score=prev_wave=-1;
     prev_center_msg[0]='\0';
     prev_bottom_msg[0]='\0';
 }
@@ -1137,7 +1187,7 @@ static void draw_turret_if_changed(void) {
     // parpadeo de invulnerabilidad o la explosión final pueden cambiar
     // cada tick, y el área es pequeña -- barato de refrescar entero.
     erase_box(TURRET_X-TURRET_BOX_HW, TURRET_BOX_TOP, 2*TURRET_BOX_HW, TURRET_BOX_H);
-    if (show) draw_turret(COLOR_TURRET);
+    if (show) draw_turret();
     prev_turret.active = show;
     renderer_flush();
 }
@@ -1151,10 +1201,18 @@ static void draw_helis_if_moved(void) {
         if (prev_heli[i].active)
             erase_box(prev_heli[i].x-HELI_BOX_HW, prev_heli[i].y-HELI_BOX_UP,
                       2*HELI_BOX_HW, HELI_BOX_UP+HELI_BOX_DN);
-        if (show) draw_heli(h, COLOR_HELI);
+        if (show) draw_heli(h);
         prev_heli[i].x=cx; prev_heli[i].y=cy; prev_heli[i].active=show;
         renderer_flush();
     }
+}
+
+/* ¿Este paracaidista está aterrizado y en el lado que está marchando
+ * ahora mismo hacia la torreta? Esos los gestiona draw_tower_region()
+ * en un único borrado+redibujado atómico (ver más abajo); el resto
+ * sigue el patrón normal de un flush por entidad. */
+static bool para_in_active_tower(const Para *p) {
+    return tower_active && p->active && p->landed && p->side==tower_side;
 }
 
 static void draw_paras_if_moved(void) {
@@ -1163,6 +1221,17 @@ static void draw_paras_if_moved(void) {
         bool show = p->active;
         if (!show && !prev_para[i].active) continue;
         int cx=FP2PX(p->x), cy=FP2PX(p->y);
+
+        if (para_in_active_tower(p)) {
+            /* No se toca la pantalla aquí -- solo se mantiene al día su
+             * posición "previa" para que, cuando deje de estar en la
+             * torre (aterriza otro/se destruye la torre/etc.), el borrado
+             * individual de más abajo parta de la posición real y no de
+             * una desfasada de antes de empezar a marchar. */
+            prev_para[i].x=cx; prev_para[i].y=cy; prev_para[i].active=show;
+            continue;
+        }
+
         if (prev_para[i].active)
             erase_box(prev_para[i].x-PARA_BOX_HW, prev_para[i].y-PARA_BOX_UP,
                       2*PARA_BOX_HW, PARA_BOX_UP+PARA_BOX_DN);
@@ -1170,6 +1239,36 @@ static void draw_paras_if_moved(void) {
         prev_para[i].x=cx; prev_para[i].y=cy; prev_para[i].active=show;
         renderer_flush();
     }
+}
+
+/*
+ * Torre/escalera: mientras tower_active, TODOS los soldados aterrizados
+ * del lado que ataca (los que marchan/escalan Y los que aún esperan su
+ * turno en su ranura original) se borran y redibujan de una sola vez
+ * sobre la franja completa de ese lado, en un único flush -- en vez de
+ * objeto por objeto. Están a menudo a menos de 15-20px unos de otros
+ * (justo su propia altura), así que con cajas individuales el borrado
+ * de uno se comía los píxeles recién dibujados de otro en el mismo
+ * frame. Al ser un único borrado+redibujado atómico, eso ya no puede
+ * pasar.
+ */
+static void draw_tower_region(void) {
+    if (!tower_active) { prev_tower_region_active = false; return; }
+
+    int side = tower_side;
+    int x0 = (side==0) ? PLAY_X : TURRET_X;
+    int x1 = (side==0) ? TURRET_X : (PLAY_X+PLAY_W);
+    int top = CANNON_OY - SOLDIER_H - 4;   // cubre al soldado que sube hasta el cañón
+    int bottom = GROUND_Y + 1;
+
+    erase_box(x0, top, x1-x0, bottom-top);
+    for (int i=0;i<MAX_PARAS;i++) {
+        const Para *p = &paras[i];
+        if (!para_in_active_tower(p)) continue;
+        draw_para(p, COLOR_SOLDIER);
+    }
+    prev_tower_region_active = true;
+    renderer_flush();
 }
 
 static void draw_bombs_if_moved(void) {
@@ -1235,12 +1334,6 @@ static void draw_particles_if_moved(void) {
 // ---------------------------------------------------------------------------
 // HUD
 // ---------------------------------------------------------------------------
-static void draw_life_icon(int lx, int ly, uint16_t color) {
-    renderer_fill_rect(lx,   ly+4, 10, 3, color);
-    renderer_fill_rect(lx+3, ly,    4, 5, color);
-    renderer_fill_rect(lx+4, ly-4,  2, 5, color);
-}
-
 static void draw_hud_if_changed(void) {
     char buf[16];
     bool changed=false;
@@ -1250,12 +1343,6 @@ static void draw_hud_if_changed(void) {
         snprintf(buf, sizeof(buf), "%06d", score);
         st7789_draw_text(PLAY_X+2, PLAY_Y+2, buf, COLOR_WHITE, COLOR_BLACK, 2);
         prev_score = score; changed = true;
-    }
-    if (lives != prev_lives) {
-        renderer_fill_rect(PLAY_X+2, PLAY_Y+18, 90, 10, COLOR_BLACK);
-        int n = lives; if (n<0) n=0; if (n>5) n=5;
-        for (int i=0;i<n;i++) draw_life_icon(PLAY_X+4+i*13, PLAY_Y+27, COLOR_TURRET);
-        prev_lives = lives; changed = true;
     }
     if (wave != prev_wave) {
         renderer_fill_rect(PLAY_X+PLAY_W-60, PLAY_Y+2, 58, 12, COLOR_BLACK);
@@ -1295,6 +1382,7 @@ static void draw_playing_frame(void) {
     if (field_needs_redraw) draw_field_static();
 
     draw_paras_if_moved();
+    draw_tower_region();
     draw_helis_if_moved();
     draw_plane_if_moved();
     draw_bombs_if_moved();
@@ -1485,7 +1573,7 @@ static void pt_tick(void) {
 
         if (!cannon_alive) {
             for (int i=0;i<MAX_HELIS;i++) helis[i].active=false;
-            lives--; state=PT_DEAD; pause_cnt=TICKS_S*3;
+            state=PT_DEAD; pause_cnt=TICKS_S*3;
             draw_playing_frame();
             break;
         }
@@ -1528,32 +1616,15 @@ static void pt_tick(void) {
     case PT_DEAD:
         upd_particles();
         if (--pause_cnt <= 0) {
-            if (lives <= 0) {
-                sound_siren_stop();
-                sound_effect_game_over();
-                draw_playing_frame();
-                if (!demo_mode && highscores_is_top(PT_GAME_ID, (uint32_t)score)) {
-                    highscores_enter(PT_GAME_ID, (uint32_t)score); // bloqueante
-                }
-                pause_cnt = 0;
-                state = PT_GAMEOVER;
-                draw_gameover_screen();
-            } else {
-                cannon_alive=true; cannon_inv=TICKS_S*2;
-                cannon_angle_deg=ANGLE_UP_DEG; cannon_rot_dir=0; cannon_enc_acc=0;
-                tower_active=false; helis_frozen=false;
-                for (int i=0;i<MAX_PARAS;i++)
-                    if (paras[i].active && paras[i].landed) paras[i].active=false;
-                for (int s=0;s<2;s++) { ground_total[s]=0; for (int n=0;n<NUM_SLOTS;n++) slot_count[s][n]=0; }
-                for (int i=0;i<MAX_BOMBS;i++) bombs[i].active=false;
-                wave_heli_budget = 12+wave*2; if (wave_heli_budget>48) wave_heli_budget=48;
-                wave_helis_spawned=0; wave_done=false; jet_launched=false;
-                jet_delay=0; attack_mode=false; attack_timer=0;
-                attack_cooldown=ATTACK_INTERVAL;
-                lane_timer[0]=TICKS_S; lane_timer[1]=TICKS_S*2+rnd(TICKS_S);
-                field_needs_redraw = true;
-                state = PT_PLAYING;
+            sound_siren_stop();
+            sound_effect_game_over();
+            draw_playing_frame();
+            if (!demo_mode && highscores_is_top(PT_GAME_ID, (uint32_t)score)) {
+                highscores_enter(PT_GAME_ID, (uint32_t)score); // bloqueante
             }
+            pause_cnt = 0;
+            state = PT_GAMEOVER;
+            draw_gameover_screen();
         } else {
             draw_playing_frame();
         }
