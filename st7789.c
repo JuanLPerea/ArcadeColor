@@ -189,14 +189,22 @@ void st7789_fill_rect(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16_t c
     if (x + w > TFT_WIDTH)  w = TFT_WIDTH - x;
     if (y + h > TFT_HEIGHT) h = TFT_HEIGHT - y;
 
+    // El framebuffer guarda cada píxel en "orden de cable" (byte alto
+    // primero), pero la Pico es little-endian: un store de 16 bits
+    // deja en la dirección más baja el byte BAJO del valor. Para que
+    // el resultado en memoria siga siendo [hi, lo] como antes, se
+    // intercambian los bytes UNA sola vez aquí fuera del bucle, y
+    // luego se hace UN store de 16 bits por píxel en vez de dos de 8
+    // bits -- offsets de framebuffer siempre son pares (fb_index
+    // devuelve múltiplos de 2), así que el acceso de 16 bits está
+    // correctamente alineado.
     uint8_t hi = color >> 8, lo = color & 0xFF;
+    uint16_t swapped = ((uint16_t)lo << 8) | hi;
 
     for (uint16_t row = 0; row < h; row++) {
-        uint32_t offset = fb_index(x, y + row);
+        uint16_t *px = (uint16_t *)&framebuffer[fb_index(x, y + row)];
         for (uint16_t col = 0; col < w; col++) {
-            framebuffer[offset]     = hi;
-            framebuffer[offset + 1] = lo;
-            offset += 2;
+            *px++ = swapped;
         }
     }
 
@@ -217,21 +225,48 @@ void st7789_fill_screen(uint16_t color) {
 }
 
 // ---------------------------------------------------------
-// Flush: transmite SOLO el rectángulo sucio, en una única sesión
-// SPI. Se fija la ventana (CASET/RASET/RAMWR) una vez, y dentro
-// de esa ventana se envían los bytes de cada fila sucia seguidos;
-// el controlador ST7789 avanza solo de fila en fila dentro de la
-// ventana, así que no hace falta reabrir RASET por cada una.
+// Flush: transmite el rectángulo sucio en una única sesión SPI.
+//
+// Si el rectángulo sucio YA es ancho de por sí (>=90% de
+// TFT_WIDTH -- el caso típico de juegos que repintan franjas
+// anchas cada frame, como el terreno/HUD de scramble.c), se
+// ensancha a la fila completa (0..TFT_WIDTH-1): el tramo de filas
+// sucias queda CONTIGUO en el framebuffer (su stride es
+// exactamente TFT_WIDTH*2), así que se manda en UNA sola
+// spi_write_blocking() en vez de una por fila.
+//
+// Si el rectángulo sucio es ESTRECHO (el caso típico de juegos con
+// render incremental que solo tocan un objeto pequeño cada vez --
+// p.ej. la pala o la bola de pong.c, que a propósito hacen un
+// flush() por objeto para mantener el rectángulo sucio mínimo), se
+// manda cada fila con su ANCHO REAL, no el de toda la pantalla:
+// ensanchar aquí también convertiría, p.ej., una pala de 6px en un
+// envío de 320px -- ~53x más datos de los necesarios, en cada tick.
 // ---------------------------------------------------------
 void st7789_flush(void) {
     if (!fb_dirty) return;
 
-    uint16_t x0 = fb_dirty_x0, y0 = fb_dirty_y0;
-    uint16_t x1 = fb_dirty_x1, y1 = fb_dirty_y1;
-    uint16_t w = x1 - x0 + 1;
+    uint16_t y0 = fb_dirty_y0, y1 = fb_dirty_y1;
+    uint16_t x0 = fb_dirty_x0, x1 = fb_dirty_x1;
+    uint16_t w  = x1 - x0 + 1;
+
+    static const uint16_t FULL_WIDTH_THRESHOLD_NUM = 9; // 90% =~ 9/10
+    static const uint16_t FULL_WIDTH_THRESHOLD_DEN = 10;
+
+    if ((uint32_t)w * FULL_WIDTH_THRESHOLD_DEN >= (uint32_t)TFT_WIDTH * FULL_WIDTH_THRESHOLD_NUM) {
+        x0 = 0; x1 = TFT_WIDTH - 1;
+        st7789_set_window(x0, y0, x1, y1);
+        cs_select();
+        gpio_put(PIN_DC, 1);
+        uint32_t offset = fb_index(x0, y0);
+        uint32_t len = (uint32_t)(y1 - y0 + 1) * TFT_WIDTH * 2;
+        spi_write_blocking(TFT_SPI, &framebuffer[offset], len);
+        cs_deselect();
+        fb_dirty = false;
+        return;
+    }
 
     st7789_set_window(x0, y0, x1, y1);
-
     cs_select();
     gpio_put(PIN_DC, 1);
     for (uint16_t row = y0; row <= y1; row++) {

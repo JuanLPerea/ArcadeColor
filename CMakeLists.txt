@@ -70,6 +70,10 @@ pico_generate_pio_header(
     ${CMAKE_CURRENT_LIST_DIR}/quadrature_encoder.pio
 )
 
+# Contador de FPS de scramble.c por stdio (ver game_scramble_run()).
+# Quita esta línea cuando ya no lo necesites.
+target_compile_definitions(ArcadeColor PRIVATE SCRAMBLE_DEBUG_FPS)
+
 pico_set_program_name(
     ArcadeColor
     "ArcadeColor"
@@ -82,7 +86,7 @@ pico_set_program_version(
 
 # Modify the below lines to enable/disable output over UART/USB
 pico_enable_stdio_uart(ArcadeColor 0)
-pico_enable_stdio_usb(ArcadeColor 0)
+pico_enable_stdio_usb(ArcadeColor 1)
 
 # Add the standard library and hardware libraries
 target_link_libraries(

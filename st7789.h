@@ -15,7 +15,11 @@
 
 // SPI usado (GP18/GP19 corresponden a SPI0 en la Pico)
 #define TFT_SPI      spi0
-#define TFT_SPI_FREQ (40 * 1000 * 1000)  // 20 MHz; sube a 32 MHz si tu cableado lo aguanta limpio
+// 62.5 MHz = clk_peri (125 MHz) / 2, el divisor más limpio y alto que
+// admite el hardware SPI de la Pico sin prescaler impar. Si al
+// probarlo ves nieve/parpadeo en la imagen (cableado largo o sin
+// blindar), baja a 40 MHz o 31.25 MHz.
+#define TFT_SPI_FREQ (62500 * 1000)
 
 // Resolución efectiva actual (se ajusta con st7789_set_rotation).
 // TFT_WIDTH/TFT_HEIGHT siguen usándose igual que antes en todo el
@@ -62,8 +66,8 @@ void st7789_set_window(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1);
 //  2) st7789_flush() solo transmite la zona que realmente ha
 //     cambiado desde el último flush (rectángulo "sucio"), no la
 //     pantalla entera. Eso es importante por el tipo de conexión:
-//     a 20 MHz por SPI, una pantalla completa (320x240x2 bytes)
-//     tarda ~60 ms en transmitirse; una sola fila de texto que
+//     una pantalla completa (320x240x2 bytes) tarda varias decenas
+//     de ms en transmitirse por SPI; una sola fila de texto que
 //     cambia, en cambio, son solo unos pocos ms. Si necesitas
 //     forzar un refresco completo (p.ej. tras cambiar de juego),
 //     usa st7789_fill_screen() antes del flush: al escribir sobre
