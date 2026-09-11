@@ -55,7 +55,7 @@ add_executable(ArcadeColor
         games/asteroids.c
         games/breakout.c
         games/scramble.c
-        games/grantrak.c
+        games/snake.c
         games/lunar_lander.c
         games/night_driver.c
         games/pacman.c

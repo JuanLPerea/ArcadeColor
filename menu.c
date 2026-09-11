@@ -466,12 +466,13 @@ static void animate_transition(
  */
 
 #define FIRMWARE_VERSION "v1.0"
-#define FIRMWARE_AUTHOR  "Juan Luis"
+#define FIRMWARE_AUTHOR  "JLP"
 
 typedef enum {
     OPT_TEST_CONTROLS = 0,
     OPT_TEST_SCREEN,
     OPT_TEST_SOUND,
+    OPT_CLEAR_SCORES,
     OPT_ABOUT,
     OPT_BACK,
     OPT_COUNT
@@ -481,12 +482,13 @@ static const char *options_item_names[OPT_COUNT] = {
     "PRUEBA CONTROLES",
     "PRUEBA PANTALLA",
     "PRUEBA SONIDO",
+    "BORRAR RECORDS",
     "ACERCA DE",
     "VOLVER"
 };
 
-#define OPTIONS_ITEM_Y_START 70
-#define OPTIONS_ITEM_SPACING 30
+#define OPTIONS_ITEM_Y_START 50
+#define OPTIONS_ITEM_SPACING 26
 #define OPTIONS_ITEM_SCALE 2
 
 static void draw_options_menu(int selected)
@@ -1142,7 +1144,97 @@ static void run_test_sound(void)
     }
 }
 
+/*
+ * -----------------------------------------------------------
+ * CONFIRMACIÓN BORRAR RECORDS
+ * -----------------------------------------------------------
+ */
+static void run_clear_scores_confirm(void)
+{
+    bool select_yes = false; // Por defecto empezamos en NO por seguridad
+    int last_encoder_raw = controls_debug_raw_count(0);
 
+    while (true) {
+        controls_update();
+        sound_update();
+
+        // Leemos el encoder para cambiar entre SI / NO
+        int current_raw = controls_debug_raw_count(0);
+        if (current_raw != last_encoder_raw) {
+            if (current_raw > last_encoder_raw) {
+                select_yes = true;
+            } else {
+                select_yes = false;
+            }
+            last_encoder_raw = current_raw;
+            sound_effect_move();
+        }
+
+        renderer_clear(COLOR_BLACK);
+
+        renderer_draw_text(
+            centered_x("BORRAR RECORDS", 2),
+            TITLE_Y,
+            "BORRAR RECORDS",
+            COLOR_RED,
+            COLOR_BLACK,
+            2
+        );
+
+        renderer_fill_rect(10, DIVIDER_Y, TFT_WIDTH - 20, 2, COLOR_RED);
+
+        renderer_draw_text(
+            centered_x("¿SEGURO?", 2),
+            80,
+            "¿SEGURO?",
+            COLOR_WHITE,
+            COLOR_BLACK,
+            2
+        );
+
+        // Opciones SI / NO
+        uint16_t color_si = select_yes ? COLOR_YELLOW : COLOR_WHITE;
+        uint16_t color_no = !select_yes ? COLOR_YELLOW : COLOR_WHITE;
+
+        renderer_draw_text(90, 140, "SI", color_si, COLOR_BLACK, 3);
+        renderer_draw_text(190, 140, "NO", color_no, COLOR_BLACK, 3);
+
+        static const char *hint = "GIRA PARA ELEGIR, PULSA PARA CONFIRMAR";
+        renderer_draw_text(
+            centered_x(hint, 1),
+            205,
+            hint,
+            COLOR_CYAN,
+            COLOR_BLACK,
+            1
+        );
+
+        renderer_flush();
+
+        if (controls_menu_select()) {
+            sound_effect_select();
+            if (select_yes) {
+                highscores_reset(); // Borra RAM y actualiza la flash
+                
+                // Pequeño aviso visual de completado
+                renderer_clear(COLOR_BLACK);
+                renderer_draw_text(
+                    centered_x("¡RECORDS BORRADOS!", 2),
+                    110,
+                    "¡RECORDS BORRADOS!",
+                    COLOR_GREEN,
+                    COLOR_BLACK,
+                    2
+                );
+                renderer_flush();
+                sleep_ms(1500);
+            }
+            return;
+        }
+
+        sleep_ms(15);
+    }
+}
 /*
  * -----------------------------------------------------------
  * ACERCA DE
@@ -1254,6 +1346,10 @@ static void show_options_screen(void)
 
                 case OPT_TEST_SOUND:
                     run_test_sound();
+                    break;
+
+                case OPT_CLEAR_SCORES:
+                    run_clear_scores_confirm();
                     break;
 
                 case OPT_ABOUT:

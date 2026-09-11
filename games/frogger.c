@@ -484,6 +484,7 @@ typedef struct {
 
 static Frog frogs[2];
 static int  n_players;
+static int  menu_enc_acc;   // acumulador del encoder de J1 para el selector 1P/2P en FR_READY (ver pong.c)
 static bool demo;
 
 static int32_t time_limit_ms(int level) {
@@ -494,7 +495,12 @@ static int32_t time_limit_ms(int level) {
 static void spawn_frog(int player) {
     Frog *f = &frogs[player];
     f->row = ROW_START;
-    f->x_fp = PX2FP(col_x(COLS/2));
+    // Con 2 jugadores, cada uno aparece desplazado del centro (uno a
+    // la izquierda, otro a la derecha) para no solaparse en la
+    // salida; en 1P, el jugador 0 sigue apareciendo centrado.
+    int col = COLS/2;
+    if (n_players == 2) col = (player == 0) ? COLS/2 - 3 : COLS/2 + 3;
+    f->x_fp = PX2FP(col_x(col));
     f->best_row = ROW_START;
     f->timer_ms = time_limit_ms(level_g);
     f->pstate = PS_PLAYING;
@@ -864,6 +870,12 @@ static void handle_input(int player) {
 static void next_life(int player) {
     Frog *f = &frogs[player];
     if (f->lives <= 0) { f->pstate = PS_DONE; return; }
+    // Fuerza el redibujado inmediato en el próximo draw_frog_if_moved
+    // en vez de confiar en que la comparación con la posición
+    // anterior ya lo detecte como "visible por primera vez" -- así
+    // la rana aparece en su celda de salida desde el primer tick,
+    // sin esperar a que el jugador la mueva.
+    prev_frog_shown[player] = false;
     spawn_frog(player);   // deja pstate = PS_PLAYING
 }
 
@@ -907,6 +919,14 @@ static void fr_tick(void) {
     switch (state) {
 
     case FR_READY:
+        if (!demo) {
+            int d = controls_get_raw_delta(0);
+            if (d) {
+                menu_enc_acc += d;
+                if (menu_enc_acc >= 4)  { n_players = (n_players == 1) ? 2 : 1; menu_enc_acc = 0; draw_ready_screen(); }
+                if (menu_enc_acc <= -4) { n_players = (n_players == 1) ? 2 : 1; menu_enc_acc = 0; draw_ready_screen(); }
+            }
+        }
         if (time_reached(ready_input_ok_time) && controls_menu_select()) {
             sound_stop_menu_music();
             game_start();
@@ -1016,24 +1036,30 @@ static void draw_ready_screen(void) {
 
     // Rana grande decorativa (no reutiliza draw_frog_shape porque
     // esa está pensada para el tamaño de celda del tablero, 22x18).
-    int fw = 70, fh = 55, fx = CX - fw/2, fy = 45;
+    int fw = 60, fh = 46, fx = CX - fw/2, fy = 40;
     renderer_fill_rect(fx, fy, fw, fh, COLOR_FROG1);
-    renderer_fill_rect(fx+12,       fy+10, 10, 10, COLOR_WHITE);
-    renderer_fill_rect(fx+fw-22,    fy+10, 10, 10, COLOR_WHITE);
-    renderer_fill_rect(fx+15,       fy+13, 4, 4, COLOR_BLACK);
-    renderer_fill_rect(fx+fw-19,    fy+13, 4, 4, COLOR_BLACK);
+    renderer_fill_rect(fx+10,       fy+9, 9, 9, COLOR_WHITE);
+    renderer_fill_rect(fx+fw-19,    fy+9, 9, 9, COLOR_WHITE);
+    renderer_fill_rect(fx+12,       fy+11, 4, 4, COLOR_BLACK);
+    renderer_fill_rect(fx+fw-17,    fy+11, 4, 4, COLOR_BLACK);
 
     const char *l1 = "ARRIBA: A    ABAJO: B";
     const char *l2 = "GIRA: IZQUIERDA/DERECHA";
-    const char *l3 = "CRUZA LA CARRETERA Y EL RIO";
-    const char *l4 = "LLENA LOS 5 HUECOS DE META";
-    const char *l5 = "PULSA PARA JUGAR";
+    renderer_draw_text(centered_x(l1, 2), 92, l1, COLOR_WHITE, COLOR_BLACK, 2);
+    renderer_draw_text(centered_x(l2, 2), 114, l2, COLOR_WHITE, COLOR_BLACK, 2);
 
-    renderer_draw_text(centered_x(l1, 2), 112, l1, COLOR_WHITE,  COLOR_BLACK, 2);
-    renderer_draw_text(centered_x(l2, 2), 134, l2, COLOR_WHITE,  COLOR_BLACK, 2);
-    renderer_draw_text(centered_x(l3, 1), 158, l3, COLOR_GREEN,  COLOR_BLACK, 1);
-    renderer_draw_text(centered_x(l4, 1), 172, l4, COLOR_GREEN,  COLOR_BLACK, 1);
-    renderer_draw_text(centered_x(l5, 2), 192, l5, COLOR_YELLOW, COLOR_BLACK, 2);
+    // Selector de 1/2 jugadores -- igual que en pong.c: se gira el
+    // encoder de J1 para cambiar (aún no se usa para nada más en
+    // esta pantalla) y se resalta la opción activa con guiones.
+    const char *s1 = (n_players == 1) ? "- 1 JUGADOR -" : "  1 JUGADOR  ";
+    const char *s2 = (n_players == 2) ? "- 2 JUGADORES -" : "  2 JUGADORES  ";
+    renderer_draw_text(centered_x(s1, 2), 138, s1, COLOR_WHITE, COLOR_BLACK, 2);
+    renderer_draw_text(centered_x(s2, 2), 160, s2, COLOR_WHITE, COLOR_BLACK, 2);
+
+    const char *l3 = "GIRA PARA CAMBIAR MODO";
+    const char *l4 = "PULSA PARA JUGAR";
+    renderer_draw_text(centered_x(l3, 1), 184, l3, COLOR_GREEN,  COLOR_BLACK, 1);
+    renderer_draw_text(centered_x(l4, 2), 198, l4, COLOR_YELLOW, COLOR_BLACK, 2);
 
     prev_msg[0] = '\0';
     renderer_flush();
@@ -1053,6 +1079,7 @@ void game_frogger_run(game_mode_t mode) {
 
     demo = (mode == GAME_MODE_DEMO);
     n_players = (mode == GAME_MODE_2P) ? 2 : 1;
+    menu_enc_acc = 0;
     blink = 0; demo_ticks = 0; g_done = false;
     field_needs_redraw = true;
     last_tick_time = get_absolute_time();

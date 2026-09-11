@@ -150,7 +150,7 @@
 // umbrales absolutos, igual de exigentes que en el original.
 #define MAX_VX       (32 * FP)
 #define MAX_VY       (45 * FP)
-#define LAND_VY_MAX  (2  * FP)   // vy < 2 px/tick para aterrizar
+#define LAND_VY_MAX  (FP / 2)   // vy < 2 px/tick para aterrizar
 #define LAND_VX_MAX  0            // vx debe ser exactamente 0
 
 #define SHIP_RADIUS 10   // para colisión con el terreno (foot_y = y + SHIP_RADIUS)
@@ -548,7 +548,7 @@ static int landing_pad_index(void) {
 }
 static bool is_safe_landing(int pi) {
     if (pi < 0) return false;
-    if (ll_abs(FP2PX(ship_vy)) > FP2PX(LAND_VY_MAX)) return false;
+    if (ll_abs(ship_vy) > LAND_VY_MAX) return false;
     if (ship_vx != LAND_VX_MAX) return false;
     if (angle_to_sprite(ship_angle) != 0) return false;
     return true;
@@ -821,21 +821,25 @@ static void draw_hud_if_changed(bool force_all) {
     }
     int vx_disp = ll_abs(FP2PX(ship_vx));
     int vy_disp = ll_abs(FP2PX(ship_vy));
+    
     if (vx_disp != prev_vx_disp || force) {
-        renderer_fill_rect(PLAY_X+PLAY_W-90, PLAY_Y+3, 90, 14, COLOR_BLACK);
-        snprintf(buf, sizeof(buf), "HX %3d", vx_disp);
+        // Ampliamos el ancho del rectángulo de borrado de 90 a 105 para alojar texto más largo
+        renderer_fill_rect(PLAY_X+PLAY_W-105, PLAY_Y+3, 105, 14, COLOR_BLACK);
+        snprintf(buf, sizeof(buf), "HX %3d", vx_disp); // %3d asegura los 3 dígitos
         int x = PLAY_X+PLAY_W-2-(int)st7789_text_width(buf, 2);
         uint16_t c = (ship_vx != 0) ? COLOR_YELLOW : COLOR_WHITE;
         renderer_draw_text(x, PLAY_Y+3, buf, c, COLOR_BLACK, 2);
         prev_vx_disp = vx_disp; changed = true;
     }
+    
     if (vy_disp != prev_vy_disp || force) {
-        renderer_fill_rect(PLAY_X+PLAY_W-90, PLAY_Y+20, 90, 10, COLOR_BLACK);
-        snprintf(buf, sizeof(buf), "VY %3d", vy_disp);
+        renderer_fill_rect(PLAY_X+PLAY_W-105, PLAY_Y+20, 105, 10, COLOR_BLACK);
+        snprintf(buf, sizeof(buf), "VY %3d", vy_disp); // %3d asegura los 3 dígitos
         uint16_t c = (vy_disp > FP2PX(LAND_VY_MAX)) ? COLOR_YELLOW : COLOR_WHITE;
         renderer_draw_text(PLAY_X+PLAY_W-2-(int)st7789_text_width(buf,1), PLAY_Y+20, buf, c, COLOR_BLACK, 1);
         prev_vy_disp = vy_disp; changed = true;
     }
+    
     if (changed) renderer_flush();
 }
 
@@ -1019,22 +1023,21 @@ static void ll_tick(void) {
 
             /*
              * Corregido: antes exigía que la nave YA estuviera casi
-             * vertical y con velocidad horizontal baja para activarse
-             * -- exactamente lo que se supone que la maniobra debe
-             * conseguir, así que casi nunca llegaba a dispararse.
-             * También dependía de zoom_active, así que si el jugador
-             * mantenía pulsado el botón desde antes de entrar en la
-             * zona de zoom, el flanco de pulsación ya se había
-             * consumido y no volvía a detectarse al activarse el
-             * zoom. Ahora: cualquier pulsación del botón durante el
-             * vuelo endereza la nave y anula su velocidad horizontal
-             * al instante (si hay combustible), sin más condiciones.
+                Maniobra de aterrizaje solo si se está a baja altura y la velocidad es baja
              */
-            if (controls_button_pressed(BTN_ENC1_SW) && fuel > 0) {
-                ship_angle = 0; ship_vx = 0;
-                maneuver_ticks = MANEUVER_DURATION;
-                sound_effect_select();
-            }
+             if (controls_button_pressed(BTN_ENC1_SW) && fuel > 0) {
+             int vx_disp = ll_abs(FP2PX(ship_vx));
+             int vy_disp = ll_abs(FP2PX(ship_vy));
+    
+             if (zoom_active && vx_disp <= 2 && vy_disp <= 15 && angle_to_sprite(ship_angle) == 0) {
+               ship_angle = 0; 
+               ship_vx = 0;
+               maneuver_ticks = MANEUVER_DURATION;
+               sound_effect_select();
+             } else {
+               sound_effect_lose_point();
+             }
+}
 
             bool soft = controls_button_down(BTN_J1_A);
             bool hard = controls_button_down(BTN_J1_B);

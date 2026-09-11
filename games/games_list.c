@@ -5,7 +5,7 @@
 #include "asteroids.h"
 #include "breakout.h"
 #include "scramble.h"
-#include "grantrak.h"
+#include "snake.h"
 #include "lunar_lander.h"
 #include "night_driver.h"
 #include "pacman.h"
@@ -19,7 +19,7 @@ const game_entry_t games_list[NUM_GAMES] = {
     { "ASTEROIDS",      game_asteroids_run },
     { "BREAKOUT",       game_breakout_run },
     { "SCRAMBLE",       game_scramble_run },
-    { "GRAN TRAK",      game_grantrak_run },
+    { "SNAKE",          game_snake_run },
     { "LUNAR LANDER",   game_lunar_lander_run },
     { "NIGHT DRIVER",   game_night_driver_run },
     { "PAC-MAN",        game_pacman_run },
