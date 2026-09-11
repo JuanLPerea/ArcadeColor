@@ -178,8 +178,84 @@ static bool field_needs_redraw = true;
 static char prev_bottom_msg[32] = "";
 static bool prev_levelup_shown = false;
 
+// ---------------------------------------------------------------------------
+// Minianimación del menú -- un pequeño peloteo (bola + 2 palas en
+// miniatura) corriendo en bucle debajo del título de S_SELECT, a modo
+// de "logo vivo" mientras el jugador decide 1P/2P. Usa el mismo estilo
+// de borrado incremental (erase rect anterior + draw rect nuevo) que
+// el resto del juego, así que su coste por tick es mínimo. (Definida
+// más abajo, después de clamp()/iabs(), que usa internamente.)
+// ---------------------------------------------------------------------------
+
 static int clamp(int v, int lo, int hi) { return v<lo?lo:v>hi?hi:v; }
 static int iabs(int v) { return v<0?-v:v; }
+
+#define MENU_ANIM_Y0   (CY-33)
+#define MENU_ANIM_Y1   (CY-12)
+#define MENU_ANIM_H    (MENU_ANIM_Y1 - MENU_ANIM_Y0)
+#define MENU_PAD_W     3
+#define MENU_PAD_H     12
+#define MENU_BALL_SZ   4
+#define MENU_ANIM_X0   (CX-50)                    // borde izq. de la pala izquierda
+#define MENU_ANIM_X1   (CX+50-MENU_PAD_W)          // borde izq. de la pala derecha
+#define MENU_BALL_MINX (MENU_ANIM_X0+MENU_PAD_W)
+#define MENU_BALL_MAXX (MENU_ANIM_X1-MENU_BALL_SZ)
+
+static bool  menu_anim_active = false;
+static float menu_ball_x, menu_ball_y, menu_ball_vx, menu_ball_vy;
+static int   menu_p1_y, menu_p2_y;
+static int   menu_prev_ball_x = -1, menu_prev_ball_y = -1;
+static int   menu_prev_p1_y = -1, menu_prev_p2_y = -1;
+
+static void init_menu_anim(void) {
+    menu_ball_x = (float)(CX - MENU_BALL_SZ/2);
+    menu_ball_y = (float)(MENU_ANIM_Y0 + MENU_ANIM_H/2 - MENU_BALL_SZ/2);
+    menu_ball_vx = 1.1f;
+    menu_ball_vy = 0.5f;
+    menu_p1_y = menu_p2_y = MENU_ANIM_Y0 + MENU_ANIM_H/2 - MENU_PAD_H/2;
+    menu_prev_ball_x = menu_prev_ball_y = -1;
+    menu_prev_p1_y = menu_prev_p2_y = -1;
+    menu_anim_active = true;
+}
+
+// Llamado una vez por tick mientras state==S_SELECT. Mueve la bola,
+// hace que las dos palas la sigan con un pequeño margen de reacción
+// (para que parezca una IA jugando en vez de un objeto que la sigue
+// pegada), borra las posiciones anteriores y dibuja las nuevas.
+static void menu_anim_tick(void) {
+    if (!menu_anim_active) return;
+
+    menu_ball_x += menu_ball_vx;
+    menu_ball_y += menu_ball_vy;
+
+    if (menu_ball_y <= MENU_ANIM_Y0 || menu_ball_y >= MENU_ANIM_Y1 - MENU_BALL_SZ)
+        menu_ball_vy = -menu_ball_vy;
+    if (menu_ball_x <= MENU_BALL_MINX) { menu_ball_x = MENU_BALL_MINX; menu_ball_vx =  fabsf(menu_ball_vx); }
+    if (menu_ball_x >= MENU_BALL_MAXX) { menu_ball_x = MENU_BALL_MAXX; menu_ball_vx = -fabsf(menu_ball_vx); }
+
+    int target = (int)menu_ball_y - (MENU_PAD_H-MENU_BALL_SZ)/2;
+    target = clamp(target, MENU_ANIM_Y0, MENU_ANIM_Y1-MENU_PAD_H);
+    if      (menu_p1_y < target) menu_p1_y++;
+    else if (menu_p1_y > target) menu_p1_y--;
+    if      (menu_p2_y < target) menu_p2_y++;
+    else if (menu_p2_y > target) menu_p2_y--;
+
+    if (menu_prev_ball_x >= 0)
+        renderer_fill_rect(menu_prev_ball_x, menu_prev_ball_y, MENU_BALL_SZ, MENU_BALL_SZ, COLOR_BLACK);
+    if (menu_prev_p1_y >= 0)
+        renderer_fill_rect(MENU_ANIM_X0, menu_prev_p1_y, MENU_PAD_W, MENU_PAD_H, COLOR_BLACK);
+    if (menu_prev_p2_y >= 0)
+        renderer_fill_rect(MENU_ANIM_X1, menu_prev_p2_y, MENU_PAD_W, MENU_PAD_H, COLOR_BLACK);
+
+    renderer_fill_rect((int)menu_ball_x, (int)menu_ball_y, MENU_BALL_SZ, MENU_BALL_SZ, COLOR_YELLOW);
+    renderer_fill_rect(MENU_ANIM_X0, menu_p1_y, MENU_PAD_W, MENU_PAD_H, COLOR_WHITE);
+    renderer_fill_rect(MENU_ANIM_X1, menu_p2_y, MENU_PAD_W, MENU_PAD_H, COLOR_WHITE);
+
+    menu_prev_ball_x = (int)menu_ball_x; menu_prev_ball_y = (int)menu_ball_y;
+    menu_prev_p1_y = menu_p1_y; menu_prev_p2_y = menu_p2_y;
+
+    renderer_flush();
+}
 
 static void pad_move(Pad *p, int dy) {
     int ph = (p == &p1) ? paddle_h : PADDLE_H;
@@ -575,6 +651,7 @@ static void draw_select_screen(void) {
     renderer_draw_text(centered_x("GIRA PARA CAMBIAR - PULSA PARA JUGAR", 1),
                         CY+60, "GIRA PARA CAMBIAR - PULSA PARA JUGAR", COLOR_WHITE, COLOR_BLACK, 1);
     renderer_flush();
+    init_menu_anim();
 }
 
 static void draw_over_screen(void) {
@@ -622,6 +699,8 @@ static void pong_tick(void) {
     switch (state) {
 
     case S_SELECT:
+
+        menu_anim_tick();
 
         int d = controls_get_raw_delta(0);
          if (d) {
