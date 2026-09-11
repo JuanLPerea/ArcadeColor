@@ -270,8 +270,8 @@ static const uint8_t * const all_layouts[NL] = {
     &layout_chess   [0][0],
 };
 static const char *layout_names[NL] = {
-    "CLASICO", "BARRAS", "DIAMANTE", "ALIEN", "SONRISA",
-    "CORAZON", "ASPA", "TRIANGULO", "ZIGZAG", "AJEDREZ"
+  "BARRAS", "DIAMANTE", "ALIEN", "SONRISA",
+    "CORAZON", "ASPA", "TRIANGULO", "ZIGZAG", "AJEDREZ", "CLASICO"
 };
 
 // ---------------------------------------------------------------------------
@@ -325,6 +325,11 @@ static int  prev_bullet_x[MAX_BULLETS], prev_bullet_y[MAX_BULLETS];
 static bool prev_bullet_active[MAX_BULLETS];
 static int  prev_pu_x[MAX_POWERUPS], prev_pu_y[MAX_POWERUPS];
 static bool prev_pu_active[MAX_POWERUPS];
+
+//static int indestructible_cooldown = 0;
+static int last_ind_r = -1;
+static int last_ind_c = -1;
+static int ind_cooldown = 0;
 
 // ---------------------------------------------------------------------------
 // Helpers de estado
@@ -423,6 +428,10 @@ static void powerup_spawn(int cx, int cy) {
 }
 
 static void serve_reset(void) {
+    // Restablece la velocidad de la bola al valor inicial del nivel actual
+    ball_spd = BALL_SPD0 + (level - 1) * BALL_SPD_INC * 2;
+    if (ball_spd > BALL_SPD_MAX) ball_spd = BALL_SPD_MAX;
+
     ball_x = pad_x + pad_w/2 - BALL_SZ/2;
     ball_y = PAD_Y - BALL_SZ - 2;
     int sign = (time_us_32() & 1) ? 1 : -1;
@@ -434,11 +443,6 @@ static void serve_reset(void) {
     snd_cooldown = 0;
     bullets_clear();
 
-    // Fuerza que la bola y la pala se redibujen de verdad en la
-    // siguiente pasada, aunque su posición coincida por casualidad
-    // con la última dibujada -- así aparecen siempre, tanto al
-    // empezar nivel como al perder una vida, sin depender de que el
-    // jugador mueva el encoder primero.
     prev_ball_x = -1;
     prev_pad_x  = -1;
 }
@@ -493,7 +497,8 @@ static void draw_bricks_full(void) {
 static void erase_brick(int r, int c) {
     int bx,by,bw,bh;
     brick_rect(r,c,&bx,&by,&bw,&bh);
-    renderer_fill_rect(bx,by,bw,bh, COLOR_BLACK);
+    // Borramos dejando intacto el borde de separación para no afectar a los ladrillos vecinos
+    renderer_fill_rect(bx, by, bw , bh , COLOR_BLACK);
     renderer_flush();
 }
 
@@ -708,7 +713,12 @@ static void break_brick(int r, int c) {
     bricks[r][c] = 0;
     bricks_left--;
     bricks_broken++;
-    erase_brick(r,c);
+    
+    // Limpiamos toda la zona de ladrillos y redibujamos los que quedan vivos de una sola vez
+    renderer_fill_rect(BRICK_X0, BRICK_Y0, BRICK_COLS * BRICK_W, BRICK_ROWS * BRICK_H, COLOR_BLACK);
+    draw_bricks_full();
+    renderer_flush();
+
     sound_effect_explosion();
 
     int bx,by,bw,bh;
@@ -724,8 +734,6 @@ static void break_brick(int r, int c) {
     }
 }
 
-// Colisión bola-ladrillo: prueba la celda bajo cada esquina de la
-// bola, rebota por el eje con menor solape (igual que el original)
 static bool ball_hits_bricks(void) {
     int cx = ball_x + BALL_SZ/2, cy = ball_y + BALL_SZ/2;
     if (cx < BRICK_X0 || cy < BRICK_Y0) return false;
@@ -736,6 +744,31 @@ static bool ball_hits_bricks(void) {
 
     int bx,by,bw,bh;
     brick_rect(r,c,&bx,&by,&bw,&bh);
+
+    if (bricks[r][c] == BRICK_INDESTRUCTIBLE) {
+        // Si es el mismo bloque que acabamos de golpear recientemente, lo ignoramos para salir
+        if (r == last_ind_r && c == last_ind_c) {
+            return true;
+        }
+
+        sound_effect_select();
+        int overlap_l = (ball_x+BALL_SZ) - bx;
+        int overlap_r = (bx+bw) - ball_x;
+        int overlap_t = (ball_y+BALL_SZ) - by;
+        int overlap_b = (by+bh) - ball_y;
+        int min_x = overlap_l < overlap_r ? overlap_l : overlap_r;
+        int min_y = overlap_t < overlap_b ? overlap_t : overlap_b;
+
+        if (min_x < min_y) ball_bx = -ball_bx;
+        else                ball_by = -ball_by;
+
+        // Registramos este bloque y activamos un pequeño periodo de gracia
+        last_ind_r = r;
+        last_ind_c = c;
+        ind_cooldown = 12;
+        return true;
+    }
+
     int overlap_l = (ball_x+BALL_SZ) - bx;
     int overlap_r = (bx+bw) - ball_x;
     int overlap_t = (ball_y+BALL_SZ) - by;
@@ -897,6 +930,16 @@ static void brk_tick(void) {
                 if (ball_magnet) { ball_magnet=false; ball_held=false; ball_bx=ball_spd*((pad_x&1)?1:-1)/2; ball_by=-ball_spd; }
                 else try_shoot();
             }
+
+
+            /*
+            // --- ATAJO DE DEPURACIÓN: Salto de nivel con el switch de J2 ---
+            // (Reemplaza 'controls_p2_select()' por la función de tu librería de controls para el J2)
+            if (controls_button_pressed(4) == true) {
+                bricks_left = 0;
+            }
+            */
+
             // La pala ha llegado al lado donde el warp abrió su
             // escapatoria: se pasa de nivel directamente.
             if (warp_active() &&
