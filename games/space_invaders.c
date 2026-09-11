@@ -790,13 +790,73 @@ static void draw_playing_frame(void) {
 // ---------------------------------------------------------------------------
 static void draw_select_screen(void) {
     renderer_clear(COLOR_BLACK);
-    renderer_draw_text(centered_x("SPACE INVADERS", 2), CY-50, "SPACE INVADERS", COLOR_CYAN, COLOR_BLACK, 2);
-    renderer_draw_text(centered_x("PULSA PARA JUGAR", 2), CY, "PULSA PARA JUGAR", COLOR_WHITE, COLOR_BLACK, 2);
-    renderer_draw_text(centered_x("GIRA: MOVER   BOTON: DISPARAR", 1), CY+30,
-                        "GIRA: MOVER   BOTON: DISPARAR", COLOR_WHITE, COLOR_BLACK, 1);
-    prev_bottom_msg[0] = '\0';
+
+    // ==========================================
+    // 1. TÍTULO PRINCIPAL (Estilo Taito)
+    // ==========================================
+    renderer_draw_text(centered_x("SPACE INVADERS", 2), 20, "SPACE INVADERS", COLOR_GREEN, COLOR_BLACK, 2);
+    
+    // Subtítulo decorativo retro
+    renderer_draw_text(centered_x("* TAITO RETRO ARCADE *", 1), 42, "* TAITO RETRO ARCADE *", COLOR_WHITE, COLOR_BLACK, 1);
+
+    // ==========================================
+    // 2. TABLA DE PUNTUACIONES / ALIENS
+    // ==========================================
+    int start_y = 75;
+    int col_text_x = 110;
+
+    // Fila superior: Mystery / OVNI especial
+    // Dibujo simple de platillo volante
+    int ufo_x = 75;
+    int ufo_y = start_y;
+    renderer_fill_rect(ufo_x + 4, ufo_y, 16, 2, COLOR_RED);
+    renderer_fill_rect(ufo_x + 2, ufo_y + 2, 20, 4, COLOR_RED);
+    renderer_fill_rect(ufo_x, ufo_y + 6, 24, 2, COLOR_RED);
+    renderer_fill_rect(ufo_x + 4, ufo_y + 8, 2, 2, COLOR_RED);
+    renderer_fill_rect(ufo_x + 10, ufo_y + 8, 4, 2, COLOR_RED);
+    renderer_fill_rect(ufo_x + 18, ufo_y + 8, 2, 2, COLOR_RED);
+    renderer_draw_text(col_text_x, ufo_y + 2, "= ? MYSTERY", COLOR_RED, COLOR_BLACK, 1);
+
+    // Fila 2: Alien calamar (Tipo 1 - parte superior)
+    int a1_x = 83;
+    int a1_y = start_y + 22;
+    renderer_fill_rect(a1_x + 2, a1_y, 8, 2, COLOR_WHITE);
+    renderer_fill_rect(a1_x, a1_y + 2, 12, 6, COLOR_WHITE);
+    renderer_fill_rect(a1_x + 2, a1_y + 8, 8, 2, COLOR_WHITE);
+    renderer_draw_text(col_text_x, a1_y + 2, "= 30 POINTS", COLOR_WHITE, COLOR_BLACK, 1);
+
+    // Fila 3: Alien cangrejo (Tipo 2 - medio)
+    int a2_x = 83;
+    int a2_y = start_y + 40;
+    renderer_fill_rect(a2_x + 2, a2_y, 8, 6, COLOR_CYAN);
+    renderer_fill_rect(a2_x, a2_y + 2, 12, 4, COLOR_CYAN);
+    renderer_draw_text(col_text_x, a2_y + 2, "= 20 POINTS", COLOR_WHITE, COLOR_BLACK, 1);
+
+    // Fila 4: Alien pulpo (Tipo 3 - inferior)
+    int a3_x = 83;
+    int a3_y = start_y + 58;
+    renderer_fill_rect(a3_x + 2, a3_y, 8, 4, COLOR_GREEN);
+    renderer_fill_rect(a3_x, a3_y + 4, 12, 4, COLOR_GREEN);
+    renderer_draw_text(col_text_x, a3_y + 2, "= 10 POINTS", COLOR_WHITE, COLOR_BLACK, 1);
+
+    // ==========================================
+    // 3. INSTRUCCIONES DE CONTROL
+    // ==========================================
+    renderer_fill_rect(30, 155, SCREEN_W - 60, 1, COLOR_GREEN);
+    
+    renderer_draw_text(centered_x("GIRO ENC: MOVER NAVE", 1), 165, "GIRO ENC: MOVER NAVE", COLOR_WHITE, COLOR_BLACK, 1);
+    renderer_draw_text(centered_x("BOTON A: DISPARAR", 1), 180, "BOTON A: DISPARAR", COLOR_WHITE, COLOR_BLACK, 1);
+
+    // ==========================================
+    // 4. MENSAJE DE INICIO PARPADEANTE
+    // ==========================================
+    if ((blink / 25) % 2 == 0) {
+        renderer_draw_text(centered_x("PRESS BUTTON TO START", 1), 210, "PRESS BUTTON TO START", COLOR_GREEN, COLOR_BLACK, 1);
+    }
+
     renderer_flush();
 }
+
 
 static void draw_over_screen(void) {
     renderer_clear(COLOR_BLACK);

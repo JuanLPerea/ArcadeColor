@@ -562,8 +562,16 @@ static void draw_bullets_if_moved(void) {
 
         if (prev_bullet_active[i])
             renderer_fill_rect(prev_bullet_x[i], prev_bullet_y[i], 3, 3, COLOR_BLACK);
-        if (show)
-            renderer_fill_rect(x, y, 3, 3, bullets[i].owner==2 ? COLOR_RED : COLOR_WHITE);
+        
+        if (show) {
+            // Seleccionar color según el propietario del disparo
+            uint16_t bullet_color = COLOR_WHITE;
+            if (bullets[i].owner == 0)      bullet_color = COLOR_SHIP0; // Cian para J1
+            else if (bullets[i].owner == 1) bullet_color = COLOR_SHIP1; // Amarillo para J2
+            else if (bullets[i].owner == 2) bullet_color = COLOR_SAUCER; // Rojo para el OVNI
+
+            renderer_fill_rect(x, y, 3, 3, bullet_color);
+        }
 
         prev_bullet_x[i] = x; prev_bullet_y[i] = y; prev_bullet_active[i] = show;
         any = true;

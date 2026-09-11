@@ -1221,66 +1221,64 @@ static void draw_title_screen(void) {
     renderer_clear(COLOR_BLACK);
 
     // ==========================================
-    // 1. TÍTULO (Parte superior)
+    // 1. TÍTULO PRINCIPAL (Estilo Konami)
     // ==========================================
-    renderer_draw_text(centered_x("SCRAMBLE", 3), 15, "SCRAMBLE", COLOR_CYAN, COLOR_BLACK, 3);
-    //renderer_draw_text(centered_x("RETRO EDITION", 1), 45, "RETRO EDITION", COLOR_YELLOW, COLOR_BLACK, 1);
+    // Marco superior decorativo
+    renderer_fill_rect(40, 10, SCREEN_W - 80, 2, COLOR_RED);
+    renderer_fill_rect(40, 13, SCREEN_W - 80, 2, COLOR_RED);
 
-    // ==========================================
-    // 2. DIBUJILLO COLORIDO / RETRO (Zona central)
-    // ==========================================
-    int art_cx = SCREEN_W / 2;
-
-    // --- NAVE (Izquierda) ---
-    int ship_x = art_cx - 85;
-    // Llama trasera
-    renderer_fill_rect(ship_x - 8, 71, 8, 8, COLOR_RED);
-    // Cuerpo triangular apuntando a la derecha
-    renderer_fill_rect(ship_x, 68, 8, 14, COLOR_CYAN);
-    renderer_fill_rect(ship_x + 8, 70, 8, 10, COLOR_CYAN);
-    renderer_fill_rect(ship_x + 16, 72, 8, 6, COLOR_CYAN);
-    renderer_fill_rect(ship_x + 24, 74, 6, 2, COLOR_CYAN);
-
-    // --- COHETE (Centro, más grande y detallado) ---
-    int rocket_x = art_cx - 12;
-    int rocket_y = 56;
-    // Punta/Ojiva superior del cohete
-    renderer_fill_rect(rocket_x + 6, rocket_y, 4, 4, COLOR_RED);
-    // Cuerpo alargado
-    renderer_fill_rect(rocket_x + 4, rocket_y + 4, 8, 20, COLOR_WHITE);
-    // Ventana del cohete
-    renderer_fill_rect(rocket_x + 6, rocket_y + 8, 4, 4, COLOR_CYAN);
-    // Aletas laterales (patas/estabilizadores)
-    renderer_fill_rect(rocket_x, rocket_y + 18, 4, 6, COLOR_RED);
-    renderer_fill_rect(rocket_x + 12, rocket_y + 18, 4, 6, COLOR_RED);
-    // Escape inferior
-    renderer_fill_rect(rocket_x + 5, rocket_y + 24, 6, 3, COLOR_YELLOW);
-
-    // --- DEPÓSITO DE COMBUSTIBLE (Derecha) ---
-    int fuel_x = art_cx + 55;
-    int fuel_y = 58;
-    // Base amarilla cuadrada con esquinas redondeadas
-    renderer_fill_rect(fuel_x + 3, fuel_y, 18, 24, COLOR_YELLOW);
-    renderer_fill_rect(fuel_x, fuel_y + 3, 24, 18, COLOR_YELLOW);
-    renderer_fill_rect(fuel_x, fuel_y, 3, 3, COLOR_BLACK);
-    renderer_fill_rect(fuel_x + 21, fuel_y, 3, 3, COLOR_BLACK);
-    renderer_fill_rect(fuel_x, fuel_y + 21, 3, 3, COLOR_BLACK);
-    renderer_fill_rect(fuel_x + 21, fuel_y + 21, 3, 3, COLOR_BLACK);
-    // 'F' negra centrada
-    renderer_draw_text(fuel_x + 8, fuel_y + 6, "F", COLOR_BLACK, COLOR_YELLOW, 1);
+    renderer_draw_text(centered_x("SCRAMBLE", 3), 20, "SCRAMBLE", COLOR_CYAN, COLOR_BLACK, 3);
+    
+    // Subtítulo de bonificación / créditos
+    renderer_draw_text(centered_x("(C) 1981 KONAMI / RETRO EDITION", 1), 48, "(C) 1981 KONAMI / RETRO EDITION", COLOR_YELLOW, COLOR_BLACK, 1);
 
     // ==========================================
-    // 3. TEXTO DE AYUDA (Parte inferior)
+    // 2. TABLA DE PUNTUACIONES / ENEMIGOS (Estilo Arcade)
     // ==========================================
-    int start_y = 110;
-    int spacing = 16;
+    int start_y = 70;
+    int col1_x = 55;
+    int col2_x = 180;
 
-   renderer_draw_text(centered_x("ENC: ALTURA/EMPUJE",2), CY+10, "ENC: ALTURA/EMPUJE", COLOR_RED, COLOR_BLACK, 2);
-    renderer_draw_text(centered_x("A-FIRE / B/BOMB",2), CY+34, "A-FIRE / B/BOMB", COLOR_RED, COLOR_BLACK, 2);
+    // Fila 1: Base / Radar
+    // Dibujito simple de base
+    renderer_fill_rect(col1_x, start_y + 2, 12, 10, COLOR_CYAN);
+    renderer_fill_rect(col1_x + 4, start_y - 2, 4, 4, COLOR_WHITE);
+    renderer_draw_text(col1_x + 24, start_y, "=  BASE / RADAR  150 PTS", COLOR_WHITE, COLOR_BLACK, 1);
 
-    // Mensaje para empezar parpadeante (en tamaño 2 para que destaque)
-    if ((blink / 30) % 2 == 0) {
-        renderer_draw_text(centered_x("PULSA PARA JUGAR", 2), 185, "PULSA PARA JUGAR", COLOR_GREEN, COLOR_BLACK, 2);
+    // Fila 2: Cohete despegando
+    int rck_x = col1_x;
+    int rck_y = start_y + 20;
+    renderer_fill_rect(rck_x + 4, rck_y, 4, 12, COLOR_RED);
+    renderer_fill_rect(rck_x + 2, rck_y + 10, 8, 2, COLOR_WHITE);
+    renderer_draw_text(rck_x + 24, rck_y + 2, "=  COHETE        100 PTS", COLOR_WHITE, COLOR_BLACK, 1);
+
+    // Fila 3: OVNI
+    int ufo_x = col1_x;
+    int ufo_y = start_y + 40;
+    renderer_fill_rect(ufo_x, ufo_y + 4, 12, 4, COLOR_MAGENTA);
+    renderer_fill_rect(ufo_x + 3, ufo_y, 6, 4, COLOR_CYAN);
+    renderer_draw_text(ufo_x + 24, ufo_y + 2, "=  OVNI          100 PTS", COLOR_WHITE, COLOR_BLACK, 1);
+
+    // Fila 4: Tanque / Depósito de combustible
+    int fuel_x = col1_x;
+    int fuel_y = start_y + 60;
+    renderer_fill_rect(fuel_x, fuel_y, 12, 12, COLOR_YELLOW);
+    renderer_draw_text(fuel_x + 3, fuel_y + 2, "F", COLOR_BLACK, COLOR_YELLOW, 1);
+    renderer_draw_text(fuel_x + 24, fuel_y + 2, "=  COMBUSTIBLE    50 PTS", COLOR_WHITE, COLOR_BLACK, 1);
+
+    // ==========================================
+    // 3. INSTRUCCIONES DE CONTROL
+    // ==========================================
+    renderer_fill_rect(30, 155, SCREEN_W - 60, 1, COLOR_CYAN);
+    
+    renderer_draw_text(centered_x("GIRO ENC: ALTURA & EMPUJE", 1), 165, "GIRO ENC: ALTURA & EMPUJE", COLOR_GREEN, COLOR_BLACK, 1);
+    renderer_draw_text(centered_x("BOTON A: DISPARO  |  BOTON B: BOMBA", 1), 180, "BOTON A: DISPARO  |  BOTON B: BOMBA", COLOR_GREEN, COLOR_BLACK, 1);
+
+    // ==========================================
+    // 4. MENSAJE DE INICIO PARPADEANTE
+    // ==========================================
+    if ((blink / 25) % 2 == 0) {
+        renderer_draw_text(centered_x("- PULSA BOTON PARA COMENZAR -", 1), 210, "- PULSA BOTON PARA COMENZAR -", COLOR_WHITE, COLOR_BLACK, 1);
     }
 
     renderer_flush();
