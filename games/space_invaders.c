@@ -88,11 +88,11 @@
 
 #define BULLET_W        3
 #define BULLET_H       10
-#define BULLET_SPD      6
+#define BULLET_SPD      3
 
 #define BOMB_W          3
 #define BOMB_H         10
-#define BOMB_SPD        2
+#define BOMB_SPD        1
 #define MAX_BOMBS       3    // reducido de 10 (ver cabecera)
 
 #define BUNKER_COUNT    3
@@ -166,6 +166,9 @@ typedef struct {
     int  explode_cnt;  // >0: mostrando puntos tras impacto
     int  pts_display;
 } Saucer;
+
+static absolute_time_t next_bomb_step;
+#define BOMB_INTERVAL_MS  15  // Velocidad constante de bajada (a mayor número, más lentas)
 
 static SIState state;
 static bool    demo;
@@ -263,10 +266,27 @@ static void reset_render_trace(void) {
  * 24 ahora, recalibrada para el mismo tipo de curva de aceleración.)
  */
 static int formation_interval_ms(int alive) {
-    if (alive <= 1) return 60;
-    int ms = 60 + (alive * alive * 440) / (ALIEN_ROWS * ALIEN_COLS * ALIEN_ROWS * ALIEN_COLS);
-    if (ms > 500) ms = 500;
-    if (ms < 60)  ms = 60;
+    if (alive <= 1) return 20; // Máxima velocidad absoluta para el último alien
+
+    int total_aliens = ALIEN_ROWS * ALIEN_COLS;
+    if (total_aliens <= 1) return 20;
+
+    int min_ms = 20; // Velocidad máxima (intervalo mínimo)
+    
+    // El nivel hace que empiece más lento (valor alto) en el nivel 1 
+    // y que la velocidad inicial vaya siendo cada vez menor (más rápido) en niveles superiores.
+    int max_ms = 280 - (level - 1) * 20;
+    if (max_ms < 90) max_ms = 90; // Tope para que en niveles muy altos no sea injugable de salida
+
+    // Usamos una progresión cúbica para la curva de aceleración por enemigos vivos
+    long long numerator = (long long)alive * alive * alive * (max_ms - min_ms);
+    long long denominator = (long long)total_aliens * total_aliens * total_aliens;
+    
+    int ms = min_ms + (int)(numerator / denominator);
+
+    if (ms < min_ms) ms = min_ms;
+    if (ms > max_ms) ms = max_ms;
+
     return ms;
 }
 
@@ -343,7 +363,15 @@ static void game_start(void) {
     init_bunkers();
     reset_render_trace();
     field_needs_redraw = true;
+    next_bomb_step = make_timeout_time_ms(BOMB_INTERVAL_MS);
 }
+
+// Función rápida para drenar inputs acumulados
+static void clear_input_buffer(void) {
+    controls_menu_select(); // Lee y descarta el estado actual del botón
+    controls_get_raw_delta(0); // Lee y descarta el delta acumulado del encoder
+}
+
 
 static void formation_step(void) {
     int xmin, ymin, xmax, ymax;
@@ -920,34 +948,39 @@ static void si_tick(void) {
         }
         if (saucer.explode_cnt > 0) saucer.explode_cnt--;
 
-        // --- Bombas enemigas ---
+   // --- Bombas enemigas (velocidad constante independiente de la formación) ---
         if (rand() % 30 == 0) alien_fire();
 
-        for (int i = 0; i < MAX_BOMBS; i++) {
-            if (!bombs[i].active) continue;
-            bombs[i].y += BOMB_SPD;
+        if (time_reached(next_bomb_step)) {
+            next_bomb_step = make_timeout_time_ms(BOMB_INTERVAL_MS);
+            
+            for (int i = 0; i < MAX_BOMBS; i++) {
+                if (!bombs[i].active) continue;
+                bombs[i].y += BOMB_SPD;
 
-            if (bombs[i].y > PLAY_Y + PLAY_H) {
-                bombs[i].active = false;
-                continue;
-            }
-            if (bullet_hits_bunker(bombs[i].x, bombs[i].y, BOMB_W, BOMB_H, true)) {
-                bombs[i].active = false;
-                continue;
-            }
-            if (bombs[i].x + BOMB_W > px - PLAYER_W/2 &&
-                bombs[i].x < px + PLAYER_W/2 &&
-                bombs[i].y + BOMB_H > PLAYER_Y &&
-                bombs[i].y < PLAYER_Y + PLAYER_H) {
-                bombs[i].active = false;
-                lives--;
-                sound_effect_explosion();
-                sound_siren_stop(); // por si el platillo seguía en pantalla
-                bullet_active = false;
-                dead_cnt = 0;
-                state = (lives <= 0) ? SI_GAME_OVER : SI_PLAYER_DEAD;
+                if (bombs[i].y > PLAY_Y + PLAY_H) {
+                    bombs[i].active = false;
+                    continue;
+                }
+                if (bullet_hits_bunker(bombs[i].x, bombs[i].y, BOMB_W, BOMB_H, true)) {
+                    bombs[i].active = false;
+                    continue;
+                }
+                if (bombs[i].x + BOMB_W > px - PLAYER_W/2 &&
+                    bombs[i].x < px + PLAYER_W/2 &&
+                    bombs[i].y + BOMB_H > PLAYER_Y &&
+                    bombs[i].y < PLAYER_Y + PLAYER_H) {
+                    bombs[i].active = false;
+                    lives--;
+                    sound_effect_explosion();
+                    sound_siren_stop();
+                    bullet_active = false;
+                    dead_cnt = 0;
+                    state = (lives <= 0) ? SI_GAME_OVER : SI_PLAYER_DEAD;
+                }
             }
         }
+
 
         // --- Invasores llegan al suelo ---
         if (formation_bottom() >= PLAYER_Y) {
@@ -965,6 +998,7 @@ static void si_tick(void) {
         }
 
         if (state == SI_GAME_OVER) {
+            clear_input_buffer();
             sound_effect_game_over();
             draw_playing_frame(); // último frame antes de cambiar de pantalla
             draw_over_screen();
@@ -989,13 +1023,25 @@ static void si_tick(void) {
         break;
 
     // ------------------------------------------------------------------
+// ------------------------------------------------------------------
+// ------------------------------------------------------------------
     case SI_LEVEL_CLEAR:
         if (++clear_cnt >= TICKS_S * 3) {
             level++;
             init_formation();
-            int extra = (level - 1) * (ALIEN_H + ALIEN_PADY);
-            int max_drop = BUNKER_Y - ALIEN_START_Y - ALIEN_ROWS * (ALIEN_H + ALIEN_PADY);
+            init_bunkers(); // Regenera los bunkers por completo
+            
+            // CAMBIO: Hacemos que el avance por nivel sea más suave (ej: la mitad de una fila o un valor fijo más pequeño)
+            // Antes multiplicaba por (ALIEN_H + ALIEN_PADY) completo. Ahora podemos usar una fracción o un paso menor, por ejemplo / 2.
+            int extra = ((level - 1) * (ALIEN_H + ALIEN_PADY)) / 2; 
+            
+            // Límite estricto para que los aliens nunca bajen más allá de una distancia segura por encima de los bunkers
+            // Dejamos un margen de seguridad (por ejemplo, 2 filas de separación respecto a los bunkers)
+            int max_drop = (BUNKER_Y - ALIEN_START_Y) - (ALIEN_ROWS * (ALIEN_H + ALIEN_PADY)) - 10;
+            if (max_drop < 0) max_drop = 0; // Protección por si acaso
+            
             if (extra > max_drop) extra = max_drop;
+            
             if (extra > 0)
                 for (int r = 0; r < ALIEN_ROWS; r++)
                     for (int c = 0; c < ALIEN_COLS; c++)
@@ -1009,6 +1055,8 @@ static void si_tick(void) {
             saucer.active = false;
             saucer.explode_cnt = 0;
             next_saucer_spawn = make_timeout_time_ms(1000 * (8 + rand() % 15));
+            
+            field_needs_redraw = true; // Fuerza el redibujado completo del campo y los nuevos bunkers
             state = SI_PLAYING;
         }
         draw_playing_frame();
@@ -1017,6 +1065,7 @@ static void si_tick(void) {
     // ------------------------------------------------------------------
     case SI_GAME_OVER:
         if (++dead_cnt > TICKS_S) {
+            clear_input_buffer();
             if (controls_menu_select()) {
                 if (!demo && highscores_is_top(SI_GAME_ID, score)) {
                     highscores_enter(SI_GAME_ID, (uint32_t)score); // bloqueante
@@ -1031,6 +1080,7 @@ static void si_tick(void) {
 
     // ------------------------------------------------------------------
     case SI_SCORES:
+        clear_input_buffer();
         if (++dead_cnt > TICKS_S * 8) g_done = true;
         if (controls_menu_select()) g_done = true;
         break;
@@ -1073,7 +1123,7 @@ void game_space_invaders_run(game_mode_t mode) {
         controls_update();
         si_tick();
         sound_update();
-        sleep_ms(8);
+        sleep_us(1000);
     }
 
     highscores_flush();

@@ -19,7 +19,7 @@
 // admite el hardware SPI de la Pico sin prescaler impar. Si al
 // probarlo ves nieve/parpadeo en la imagen (cableado largo o sin
 // blindar), baja a 40 MHz o 31.25 MHz.
-#define TFT_SPI_FREQ (62500 * 1000)
+#define TFT_SPI_FREQ (125000  * 1000)
 
 // Resolución efectiva actual (se ajusta con st7789_set_rotation).
 // TFT_WIDTH/TFT_HEIGHT siguen usándose igual que antes en todo el

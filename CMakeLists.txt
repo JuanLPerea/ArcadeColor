@@ -45,8 +45,6 @@ add_executable(ArcadeColor
         renderer.c
         controls.c
         menu.c
-        records.c
-        demo.c
         sound.c
         highscores.c
         games/games_list.c
