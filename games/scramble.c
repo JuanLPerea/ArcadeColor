@@ -576,7 +576,7 @@ static void spawn_obj(uint8_t type, int32_t world_x, int hp, float extra_y) {
         o->rel_y = 0;
         o->hp = hp;
         o->launched = false;
-        o->launch_delay = (type==OBJ_ROCKET) ? 30 + (int)(rng_next()%60) : 40 + (int)(rng_next()%80);
+        o->launch_delay = (type==OBJ_ROCKET) ? 60 + (int)(rng_next()%90) : 40 + (int)(rng_next()%80);
         o->base_y = extra_y;
         o->t = rng_float() * 2.0f * (float)M_PI;
         o->phase = rng_float() * 2.0f * (float)M_PI;
@@ -901,7 +901,7 @@ static void ship_crash(void) {
     add_explosion((float)(ship_x+SHIP_W/2), (float)(ship_y+SHIP_H/2), true);
     sound_effect_lose_point();
     lives--;
-    fuel = FUEL_MAX;   // más permisivo tras perder nave (tomado del HTML)
+    if (fuel <= 0) fuel = FUEL_MAX;   // más permisivo tras perder nave (tomado del HTML)
     pause_cnt = TICKS_S;
     state = SCR_DEAD;
 }
@@ -1219,16 +1219,73 @@ static void draw_field_static(void) {
 
 static void draw_title_screen(void) {
     renderer_clear(COLOR_BLACK);
-    renderer_draw_text(centered_x("SCRAMBLE",3), CY-70, "SCRAMBLE", COLOR_CYAN, COLOR_BLACK, 3);
-    renderer_draw_text(centered_x("PULSA PARA JUGAR",2), CY-20, "PULSA PARA JUGAR", COLOR_WHITE, COLOR_BLACK, 2);
-    renderer_draw_text(centered_x("GIRA: SUBIR/BAJAR",1), CY+16,
-                        "GIRA: SUBIR/BAJAR", COLOR_WHITE, COLOR_BLACK, 1);
-    renderer_draw_text(centered_x("A: DISPARO  B: BOMBA  ENC: EMPUJE",1), CY+32,
-                        "A: DISPARO  B: BOMBA  ENC: EMPUJE", COLOR_WHITE, COLOR_BLACK, 1);
-    renderer_draw_text(centered_x("OVNIS, METEOROS Y UN JEFE FINAL",1), CY+48,
-                        "OVNIS, METEOROS Y UN JEFE FINAL", COLOR_YELLOW, COLOR_BLACK, 1);
+
+    // ==========================================
+    // 1. TÍTULO (Parte superior)
+    // ==========================================
+    renderer_draw_text(centered_x("SCRAMBLE", 3), 15, "SCRAMBLE", COLOR_CYAN, COLOR_BLACK, 3);
+    //renderer_draw_text(centered_x("RETRO EDITION", 1), 45, "RETRO EDITION", COLOR_YELLOW, COLOR_BLACK, 1);
+
+    // ==========================================
+    // 2. DIBUJILLO COLORIDO / RETRO (Zona central)
+    // ==========================================
+    int art_cx = SCREEN_W / 2;
+
+    // --- NAVE (Izquierda) ---
+    int ship_x = art_cx - 85;
+    // Llama trasera
+    renderer_fill_rect(ship_x - 8, 71, 8, 8, COLOR_RED);
+    // Cuerpo triangular apuntando a la derecha
+    renderer_fill_rect(ship_x, 68, 8, 14, COLOR_CYAN);
+    renderer_fill_rect(ship_x + 8, 70, 8, 10, COLOR_CYAN);
+    renderer_fill_rect(ship_x + 16, 72, 8, 6, COLOR_CYAN);
+    renderer_fill_rect(ship_x + 24, 74, 6, 2, COLOR_CYAN);
+
+    // --- COHETE (Centro, más grande y detallado) ---
+    int rocket_x = art_cx - 12;
+    int rocket_y = 56;
+    // Punta/Ojiva superior del cohete
+    renderer_fill_rect(rocket_x + 6, rocket_y, 4, 4, COLOR_RED);
+    // Cuerpo alargado
+    renderer_fill_rect(rocket_x + 4, rocket_y + 4, 8, 20, COLOR_WHITE);
+    // Ventana del cohete
+    renderer_fill_rect(rocket_x + 6, rocket_y + 8, 4, 4, COLOR_CYAN);
+    // Aletas laterales (patas/estabilizadores)
+    renderer_fill_rect(rocket_x, rocket_y + 18, 4, 6, COLOR_RED);
+    renderer_fill_rect(rocket_x + 12, rocket_y + 18, 4, 6, COLOR_RED);
+    // Escape inferior
+    renderer_fill_rect(rocket_x + 5, rocket_y + 24, 6, 3, COLOR_YELLOW);
+
+    // --- DEPÓSITO DE COMBUSTIBLE (Derecha) ---
+    int fuel_x = art_cx + 55;
+    int fuel_y = 58;
+    // Base amarilla cuadrada con esquinas redondeadas
+    renderer_fill_rect(fuel_x + 3, fuel_y, 18, 24, COLOR_YELLOW);
+    renderer_fill_rect(fuel_x, fuel_y + 3, 24, 18, COLOR_YELLOW);
+    renderer_fill_rect(fuel_x, fuel_y, 3, 3, COLOR_BLACK);
+    renderer_fill_rect(fuel_x + 21, fuel_y, 3, 3, COLOR_BLACK);
+    renderer_fill_rect(fuel_x, fuel_y + 21, 3, 3, COLOR_BLACK);
+    renderer_fill_rect(fuel_x + 21, fuel_y + 21, 3, 3, COLOR_BLACK);
+    // 'F' negra centrada
+    renderer_draw_text(fuel_x + 8, fuel_y + 6, "F", COLOR_BLACK, COLOR_YELLOW, 1);
+
+    // ==========================================
+    // 3. TEXTO DE AYUDA (Parte inferior)
+    // ==========================================
+    int start_y = 110;
+    int spacing = 16;
+
+   renderer_draw_text(centered_x("ENC: ALTURA/EMPUJE",2), CY+10, "ENC: ALTURA/EMPUJE", COLOR_RED, COLOR_BLACK, 2);
+    renderer_draw_text(centered_x("A-FIRE / B/BOMB",2), CY+34, "A-FIRE / B/BOMB", COLOR_RED, COLOR_BLACK, 2);
+
+    // Mensaje para empezar parpadeante (en tamaño 2 para que destaque)
+    if ((blink / 30) % 2 == 0) {
+        renderer_draw_text(centered_x("PULSA PARA JUGAR", 2), 185, "PULSA PARA JUGAR", COLOR_GREEN, COLOR_BLACK, 2);
+    }
+
     renderer_flush();
 }
+
 
 static void draw_ready_screen(void) {
     renderer_clear(COLOR_BLACK);

@@ -608,8 +608,8 @@ static void draw_hud_if_changed(void) {
 
 static void update_bottom_message(const char *target, int scale) {
     if (strcmp(target, prev_bottom_msg)==0) return;
-    renderer_fill_rect(0, PLAY_Y+PLAY_H-18, TFT_WIDTH, 16, COLOR_BLACK);
-    if (target[0]) renderer_draw_text(centered_x(target,scale), PLAY_Y+PLAY_H-16, target, COLOR_WHITE, COLOR_BLACK, scale);
+    renderer_fill_rect(PLAY_X, CY - 10, PLAY_W, 20, COLOR_BLACK);
+    if (target[0]) renderer_draw_text(centered_x(target,scale), CY - 8, target, COLOR_WHITE, COLOR_BLACK, scale);
     strncpy(prev_bottom_msg, target, sizeof(prev_bottom_msg)-1);
     prev_bottom_msg[sizeof(prev_bottom_msg)-1]='\0';
     renderer_flush();
@@ -628,7 +628,7 @@ static void draw_playing_frame(void) {
     const char *bottom = "";
     if (brk_state==BRK_SERVE && !demo) bottom = "PULSA PARA LANZAR";
     else if (demo && bon)               bottom = "DEMO - PULSA PARA JUGAR";
-    update_bottom_message(bottom, 1);
+    update_bottom_message(bottom, 2);
 }
 
 // ---------------------------------------------------------------------------
@@ -636,10 +636,28 @@ static void draw_playing_frame(void) {
 // ---------------------------------------------------------------------------
 static void draw_title_screen(void) {
     renderer_clear(COLOR_BLACK);
-    renderer_draw_text(centered_x("BREAKOUT",3), CY-60, "BREAKOUT", COLOR_CYAN, COLOR_BLACK, 3);
-    renderer_draw_text(centered_x("PULSA PARA JUGAR",2), CY, "PULSA PARA JUGAR", COLOR_WHITE, COLOR_BLACK, 2);
-    renderer_draw_text(centered_x("GIRA: MOVER   BOTON: LANZAR/DISPARAR",1), CY+30,
-                        "GIRA: MOVER   BOTON: LANZAR/DISPARAR", COLOR_WHITE, COLOR_BLACK, 1);
+    
+    // Título y opciones principales
+    renderer_draw_text(centered_x("BREAKOUT",3), CY-100, "BREAKOUT", COLOR_GREEN, COLOR_BLACK, 3);
+    renderer_draw_text(centered_x("PULSA PARA JUGAR",2), CY-10, "PULSA PARA JUGAR", COLOR_MAGENTA, COLOR_BLACK, 2);
+    renderer_draw_text(centered_x("GIRA: MOVER",2), CY+30, "GIRA: MOVER", COLOR_CYAN, COLOR_BLACK, 2);
+    renderer_draw_text(centered_x("BOTON: LANZAR/DISPARAR",2), CY+54, "BOTON: LANZAR/DISPARAR", COLOR_CYAN, COLOR_BLACK, 2);
+
+    // --- DIBUJITO DECORATIVO (Mini tablero de Breakout en la parte inferior) ---
+    int deco_y = CY -65;
+    int deco_x = CX - 60;
+    
+    // Unas pequeñas filas de ladrillos de colores decorativos
+    for (int c = 0; c < 4; c++) {
+        renderer_fill_rect(deco_x + (c * 32), deco_y, 30, 8, COLOR_RED);
+        renderer_fill_rect(deco_x + (c * 32), deco_y + 10, 30, 8, COLOR_YELLOW);
+        renderer_fill_rect(deco_x + (c * 32), deco_y + 20, 30, 8, COLOR_GREEN);
+    }
+    
+    // Una mini pala y la pelota rebotando
+    renderer_fill_rect(CX - 18, deco_y + 38, 36, 5, COLOR_WHITE); // Pala
+    renderer_fill_rect(CX - 3, deco_y + 29, 5, 5, COLOR_WHITE);   // Pelota
+
     prev_bottom_msg[0]='\0';
     renderer_flush();
 }
@@ -651,8 +669,8 @@ static void draw_over_screen(void) {
     snprintf(buf, sizeof(buf), "PUNTOS: %d", score);
     renderer_draw_text(centered_x(buf,2), CY+8, buf, COLOR_WHITE, COLOR_BLACK, 2);
     if (!demo)
-        renderer_draw_text(centered_x("PULSA PARA CONTINUAR",1), CY+40,
-                            "PULSA PARA CONTINUAR", COLOR_WHITE, COLOR_BLACK, 1);
+        renderer_draw_text(centered_x("PULSA PARA CONTINUAR",2), CY+40,
+                            "PULSA PARA CONTINUAR", COLOR_WHITE, COLOR_BLACK, 2);
     renderer_flush();
 }
 
