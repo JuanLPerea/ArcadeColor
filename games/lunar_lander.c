@@ -819,8 +819,10 @@ static void draw_hud_if_changed(bool force_all) {
         if (filled>0) renderer_fill_rect(bar_x+1, bar_y+1, filled, bar_h-2, COLOR_GREEN);
         prev_fuel = fuel; changed = true;
     }
-    int vx_disp = ll_abs(FP2PX(ship_vx));
-    int vy_disp = ll_abs(FP2PX(ship_vy));
+
+    // HUD velocidades x e y
+    int vx_disp = FP2PX(ship_vx* 100) ;
+    int vy_disp = FP2PX(ship_vy* 100) ;
     
     if (vx_disp != prev_vx_disp || force) {
         // Ampliamos el ancho del rectángulo de borrado de 90 a 105 para alojar texto más largo
@@ -836,7 +838,7 @@ static void draw_hud_if_changed(bool force_all) {
         renderer_fill_rect(PLAY_X+PLAY_W-105, PLAY_Y+20, 105, 10, COLOR_BLACK);
         snprintf(buf, sizeof(buf), "VY %3d", vy_disp); // %3d asegura los 3 dígitos
         uint16_t c = (vy_disp > FP2PX(LAND_VY_MAX)) ? COLOR_YELLOW : COLOR_WHITE;
-        renderer_draw_text(PLAY_X+PLAY_W-2-(int)st7789_text_width(buf,1), PLAY_Y+20, buf, c, COLOR_BLACK, 1);
+        renderer_draw_text(PLAY_X+PLAY_W-2-(int)st7789_text_width(buf,2), PLAY_Y+20, buf, c, COLOR_BLACK, 2);
         prev_vy_disp = vy_disp; changed = true;
     }
     
