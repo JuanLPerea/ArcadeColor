@@ -166,6 +166,7 @@ typedef struct {
     bool    alive;
     bool    human;       // false = controlada por la IA
     int32_t score;
+    int     lives;       // 0 = eliminada para el resto de la partida (no vuelve a aparecer en begin_round())
 } Snake;
 
 static Snake snakes[2];
@@ -326,6 +327,7 @@ static int     blink = 0;
 static int     winner = 0;      // 0 = doble choque, 1/2 = gana ese jugador
 static int32_t next_level_score;
 static int32_t enc_acc[2];
+static bool    turn_locked[2];   // true = ya se aplico un giro este intervalo de movimiento (ver ai_turn/handle_turn_input)
 static int     menu_enc_acc = 0;
 static int32_t move_timer_ms;
 static absolute_time_t pause_until;
@@ -426,15 +428,16 @@ static void clear_messages(void) {
 // ---------------------------------------------------------------------------
 static int32_t prev_hud_p1 = -1, prev_hud_p2 = -1;
 static int prev_hud_level = -1;
+static int prev_hud_lives1 = -1, prev_hud_lives2 = -1;
 
 static void draw_hud_if_changed(bool force) {
-    char buf[16];
+    char buf[20];
     bool changed = false;
-    if (snakes[0].score != prev_hud_p1 || force) {
-        renderer_fill_rect(PLAY_X+1, PLAY_Y+1, 110, 14, COLOR_BLACK);
-        snprintf(buf, sizeof(buf), "P1 %05ld", (long)snakes[0].score);
+    if (snakes[0].score != prev_hud_p1 || snakes[0].lives != prev_hud_lives1 || force) {
+        renderer_fill_rect(PLAY_X+1, PLAY_Y+1, 130, 14, COLOR_BLACK);
+        snprintf(buf, sizeof(buf), "P1 %05ld x%d", (long)snakes[0].score, snakes[0].lives);
         renderer_draw_text(PLAY_X+3, PLAY_Y+3, buf, COLOR_P1, COLOR_BLACK, 1);
-        prev_hud_p1 = snakes[0].score; changed = true;
+        prev_hud_p1 = snakes[0].score; prev_hud_lives1 = snakes[0].lives; changed = true;
     }
     if (level != prev_hud_level || force) {
         renderer_fill_rect(CX-30, PLAY_Y+1, 60, 14, COLOR_BLACK);
@@ -442,12 +445,12 @@ static void draw_hud_if_changed(bool force) {
         renderer_draw_text(centered_x(buf, 1), PLAY_Y+3, buf, COLOR_WHITE, COLOR_BLACK, 1);
         prev_hud_level = level; changed = true;
     }
-    if (snakes[1].score != prev_hud_p2 || force) {
-        renderer_fill_rect(PLAY_X+PLAY_W-111, PLAY_Y+1, 110, 14, COLOR_BLACK);
-        snprintf(buf, sizeof(buf), "P2 %05ld", (long)snakes[1].score);
+    if (snakes[1].score != prev_hud_p2 || snakes[1].lives != prev_hud_lives2 || force) {
+        renderer_fill_rect(PLAY_X+PLAY_W-131, PLAY_Y+1, 130, 14, COLOR_BLACK);
+        snprintf(buf, sizeof(buf), "P2 %05ld x%d", (long)snakes[1].score, snakes[1].lives);
         int tx = PLAY_X+PLAY_W-3-(int)st7789_text_width(buf, 1);
         renderer_draw_text(tx, PLAY_Y+3, buf, COLOR_P2, COLOR_BLACK, 1);
-        prev_hud_p2 = snakes[1].score; changed = true;
+        prev_hud_p2 = snakes[1].score; prev_hud_lives2 = snakes[1].lives; changed = true;
     }
     if (changed) renderer_flush();
 }
@@ -456,13 +459,18 @@ static void draw_hud_if_changed(bool force) {
 // Ronda -- arranca/reinicia el tablero conservando puntuaciones.
 // ---------------------------------------------------------------------------
 static void begin_round(void) {
-    reset_snake(&snakes[0], 7, 8, 0, 1);
-    reset_snake(&snakes[1], COLS-8, ARENA_ROWS-9, 0, -1);
+    // Solo reaparece quien le queden vidas -- si una serpiente ya
+    // esta eliminada, se queda fuera del tablero el resto de la
+    // partida (ver crash_snake) y la otra puede seguir jugando sola.
+    if (snakes[0].lives > 0) reset_snake(&snakes[0], 7, 8, 0, 1);
+    else                     snakes[0].alive = false;
+    if (snakes[1].lives > 0) reset_snake(&snakes[1], COLS-8, ARENA_ROWS-9, 0, -1);
+    else                     snakes[1].alive = false;
     make_arena(level);
     spawn_food();
     for (int i = 0; i < MAX_PARTICLES; i++) particles[i].active = false;
     draw_arena_static();
-    prev_hud_p1 = prev_hud_p2 = -1; prev_hud_level = -1;
+    prev_hud_p1 = prev_hud_p2 = -1; prev_hud_level = -1; prev_hud_lives1 = prev_hud_lives2 = -1;
     draw_hud_if_changed(true);
     char l1[24];
     snprintf(l1, sizeof(l1), "NIVEL %d", level);
@@ -477,8 +485,14 @@ static void game_reset_full(void) {
     snakes[0].score = 0; snakes[1].score = 0;
     snakes[0].human = !demo;
     snakes[1].human = !demo && (n_players == 2);
+    // En demo se dan vidas de sobra: el propio demo ya se corta solo
+    // por tiempo o por cualquier pulsacion (ver sn_tick), así que no
+    // hace falta que el sistema de vidas también lo termine.
+    snakes[0].lives = demo ? 99 : 3;
+    snakes[1].lives = demo ? 99 : 3;
     winner = 0;
     enc_acc[0] = enc_acc[1] = 0;
+    turn_locked[0] = turn_locked[1] = false;
 }
 
 // ---------------------------------------------------------------------------
@@ -487,10 +501,19 @@ static void game_reset_full(void) {
 // inmediata (pared, propio cuerpo o cuerpo rival) y elige la que mas
 // acerca a la comida, con un poco de aleatoriedad para que no sea
 // perfectamente robotica.
+//
+// turn_locked limita a UN giro por intervalo de movimiento (tanto
+// para la IA como para el jugador humano, ver handle_turn_input):
+// sin este limite, girar el encoder con cierta rapidez podia meter
+// 2 "detents" antes del siguiente paso, sumando dos giros de 90
+// grados -- un giro de 180 grados de golpe, es decir, la serpiente
+// se mete de cabeza contra su propio cuello. Eso se sentia como un
+// choque "falso", ya que el jugador solo habia pretendido girar una
+// vez. Se desbloquea en do_move_step() al confirmarse cada paso.
 // ---------------------------------------------------------------------------
 static void ai_turn(int idx) {
     Snake *s = &snakes[idx];
-    if (!s->alive) return;
+    if (!s->alive || turn_locked[idx]) return;
     int hx = seg_x(s, 0), hy = seg_y(s, 0);
     int cdx = s->qdx, cdy = s->qdy;
     int cand_dx[3] = { cdx, -cdy, cdy };
@@ -505,22 +528,25 @@ static void ai_turn(int idx) {
     }
     if (best < 0) return;   // sin salida segura -- sigue recto, choque inevitable
     s->qdx = cand_dx[best]; s->qdy = cand_dy[best];
+    if (best != 0) turn_locked[idx] = true;   // best==0 es "seguir recto", no consume el giro disponible
 }
 
 static void handle_turn_input(int player) {
     Snake *s = &snakes[player];
     if (!s->alive || !s->human) return;
-    int d = controls_get_raw_delta(player);
+    int d = controls_get_raw_delta(player);   // se consume SIEMPRE (aunque el giro este bloqueado), para no acumular un remanente que dispare un giro de mas al desbloquear
+    if (turn_locked[player]) return;
     if (!d) return;
     enc_acc[player] += d;
-    if (enc_acc[player] >= 4)       { turn_relative(s, +1); enc_acc[player] = 0; }
-    else if (enc_acc[player] <= -4) { turn_relative(s, -1); enc_acc[player] = 0; }
+    if (enc_acc[player] >= 4)       { turn_relative(s, +1); turn_locked[player] = true; enc_acc[player] = 0; }
+    else if (enc_acc[player] <= -4) { turn_relative(s, -1); turn_locked[player] = true; enc_acc[player] = 0; }
 }
 
 static void crash_snake(int idx, int hx, int hy) {
     Snake *sn = &snakes[idx];
     if (!sn->alive) return;   // evita partirculas dobles si ya se marco por otra via este mismo paso
     sn->alive = false;
+    if (sn->lives > 0) sn->lives--;
     uint16_t cols[3] = { idx == 0 ? COLOR_P1 : COLOR_P2, COLOR_WHITE, COLOR_YELLOW };
     spawn_burst(cell_x(hx)+CELL/2, cell_y(hy)+CELL/2, 16, cols, 3);
 }
@@ -539,6 +565,7 @@ static void do_move_step(void) {
         Snake *sn = &snakes[s];
         if (!sn->alive) continue;
         sn->dx = sn->qdx; sn->dy = sn->qdy;
+        turn_locked[s] = false;   // el giro de este intervalo ya se ha consumido -- desbloquea para el siguiente
         int hx = seg_x(sn, 0), hy = seg_y(sn, 0);
         int nx = hx + sn->dx, ny = hy + sn->dy;
 
@@ -621,6 +648,8 @@ static void draw_ready_screen(void) {
     const char *l2 = "MANTEN A: IMPULSO";
     renderer_draw_text(centered_x(l1, 2), 60, l1, COLOR_WHITE, COLOR_BLACK, 2);
     renderer_draw_text(centered_x(l2, 2), 82, l2, COLOR_WHITE, COLOR_BLACK, 2);
+    const char *l2b = "3 VIDAS POR JUGADOR";
+    renderer_draw_text(centered_x(l2b, 1), 102, l2b, COLOR_GREEN, COLOR_BLACK, 1);
 
     // Vista previa de las dos serpientes (decorativa)
     int py = 116;
@@ -655,6 +684,23 @@ static void draw_scores_screen(void) {
 // ---------------------------------------------------------------------------
 // Maquina de estados
 // ---------------------------------------------------------------------------
+// La partida termina cuando TODOS los jugadores humanos se han
+// quedado sin vidas (0 en demo no cuenta -- devuelve false si no hay
+// ningun humano, así que el demo nunca termina por esta vía). Si un
+// humano aun tiene vidas mientras el otro puesto (humano o IA) ya se
+// quedo sin ellas, la partida sigue -- ese puesto simplemente no
+// vuelve a aparecer en begin_round().
+static bool humans_out(void) {
+    bool any_human = false;
+    for (int i = 0; i < 2; i++) {
+        if (snakes[i].human) {
+            any_human = true;
+            if (snakes[i].lives > 0) return false;
+        }
+    }
+    return any_human;
+}
+
 static void sn_tick(void) {
     blink++;
     update_dt_scale();
@@ -715,7 +761,7 @@ static void sn_tick(void) {
     case SN_ROUND_OVER:
         update_and_draw_particles();
         if (time_reached(pause_until)) {
-            if (level >= 9) {
+            if (humans_out()) {
                 sound_effect_game_over();
                 update_messages("GAME OVER", COLOR_RED, 3, "", COLOR_BLACK, 1);
                 pause_until = make_timeout_time_ms(2000);
