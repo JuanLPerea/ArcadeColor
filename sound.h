@@ -59,6 +59,29 @@ void sound_siren_start(void);
 void sound_siren_stop(void);
 
 /*
+ * Motor -- zumbido continuo cuyo tono sube con la velocidad (canal 2,
+ * compartido con sound_siren_start() y la música de menú -- quien se
+ * active el último se queda el canal). Llamar sound_engine_set_speed()
+ * una vez por frame con la velocidad actual (0 = ralentí, 255 = a
+ * fondo); no hace falta limitar tú la frecuencia de llamada. Llamar
+ * sound_engine_stop() al salir del juego de conducción.
+ */
+void sound_engine_set_speed(uint8_t speed_pct);
+void sound_engine_stop(void);
+
+/*
+ * Derrape -- ruido continuo (canal 1, libre durante la partida) para
+ * cuando el coche patina -- p.ej. velocidad alta + volante girado a
+ * fondo. Llamar sound_skid_start() en cada frame mientras se cumplan
+ * las condiciones de derrape y sound_skid_stop() en cuanto se dejen
+ * de cumplir; llamar start() repetidamente mientras ya suena no hace
+ * nada, así que no hace falta que el juego lleve su propio estado de
+ * "¿ya está sonando?".
+ */
+void sound_skid_start(void);
+void sound_skid_stop(void);
+
+/*
  * Control del canal de efectos.
  */
 void sound_effect_stop(void);

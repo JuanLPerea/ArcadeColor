@@ -111,6 +111,33 @@
  *     así que el TIEMPO hasta velocidad máxima (~1.5s) y hasta frenar
  *     (~1.1s) no cambia aunque cambie SPEED_MAX -- solo cambia lo rápido
  *     que se ve pasar la carretera.
+ *
+ * ---------------------------------------------------------------------
+ * 5ª pasada (arrancaba en curva -- ya arreglado en init_posts; y ahora:
+ * curvas más cortas y variadas, para exigir corrección continua)
+ * ---------------------------------------------------------------------
+ *   - next_curve_segment() ya no alterna en una secuencia fija (recta/
+ *     chicane según fase par, izda/dcha según fase impar): esa secuencia
+ *     era predecible en cuanto le pillabas el patrón. Ahora cada tramo
+ *     se sortea de forma independiente (tipo Y signo al azar), así que
+ *     puede haber dos curvas seguidas al mismo lado, una recta cortita,
+ *     etc. Se eliminó curve_phase (ya no hace falta).
+ *   - Los tramos duran bastante menos ticks (STRAIGHT/CURVE/CHICANE
+ *     *_MIN/MAX, todos reducidos a ~1/3 de lo que eran) para que el
+ *     volante haga falta de forma prácticamente continua.
+ *
+ * ---------------------------------------------------------------------
+ * 6ª pasada: sonido de motor + derrape
+ * ---------------------------------------------------------------------
+ * Se añadieron a sound.h/sound.c (no existían): sound_engine_set_speed()
+ * (canal 2, tono continuo que sube con road_speed -- comparte canal con
+ * la sirena y la música de menú, gana quien se active el último) y
+ * sound_skid_start()/stop() (canal 1, ruido continuo cuando
+ * road_speed>60% de SPEED_MAX Y |steer_angle|>60% de STEER_LIMIT a la
+ * vez). Se llaman una vez por tick desde ND_PLAYING, y se paran
+ * (sound_engine_stop()/sound_skid_stop()) en el resto de estados y al
+ * salir del juego. Si el derrape salta demasiado a menudo o casi nunca,
+ * los umbrales "3/5" de ambas condiciones son lo primero a tocar.
  */
 
 #include <stdlib.h>
@@ -230,18 +257,20 @@ static const int16_t SIN32[32] = {
 // ---------------------------------------------------------------------------
 // Duraciones de tramo de carretera (en ticks -- no se reescalan, ver cabecera)
 // ---------------------------------------------------------------------------
-#define STRAIGHT_MIN    62
-#define STRAIGHT_MAX   124
-#define CURVE_SOFT_MIN  50
-#define CURVE_SOFT_MAX  93
-#define CURVE_HARD_MIN  37
-#define CURVE_HARD_MAX  74
+#define STRAIGHT_MIN    22
+#define STRAIGHT_MAX    45
+#define CURVE_SOFT_MIN  22
+#define CURVE_SOFT_MAX  40
+#define CURVE_HARD_MIN  16
+#define CURVE_HARD_MAX  32
+#define CHICANE_MIN     14
+#define CHICANE_MAX     26
 
 // ---------------------------------------------------------------------------
 // Etapas / cuenta atrás
 // ---------------------------------------------------------------------------
 #define COUNTDOWN_START (60 * TICKS_S)
-#define COUNTDOWN_BONUS (60 * TICKS_S)
+#define COUNTDOWN_BONUS (20 * TICKS_S)
 #define KM_BASE  1875000UL   // ver derivación en la cabecera (orig. 4 500 000 * 5/12)
 
 // ---------------------------------------------------------------------------
@@ -332,7 +361,6 @@ static int32_t horizon_cx_fp;
 static int32_t steer_angle;
 static int32_t curve_target;
 static int     curve_ticks_left;
-static int     curve_phase;
 
 static int      stage;
 static int32_t  countdown_ticks;
@@ -378,52 +406,47 @@ static void init_posts(void) {
     curve_target     = 0;
     // Recta de cortesía al empezar la partida (igual que tras un choque,
     // ver "curve_ticks_left = 120" en nd_tick): antes esto era "= 1", así
-    // que en el primerísimo tick ya se generaba un tramo de CURVA real
-    // (next_curve_segment() con curve_phase=0 pasa a 1, fase impar =
-    // curva) -- el juego arrancaba literalmente dentro de una curva sin
-    // dar tiempo a nada, y se sentía como si "derivase" solo.
+    // que en el primerísimo tick ya se generaba un tramo de CURVA real --
+    // el juego arrancaba literalmente dentro de una curva sin dar tiempo
+    // a nada, y se sentía como si "derivase" solo.
     curve_ticks_left = TICKS_S * 2;
-    curve_phase      = 0;
     for (int i = 0; i < NUM_POSTS; i++) {
         posts[i].y_fp  = PX2FP(HORIZ_Y) + (int32_t)i * spacing_fp;
         posts[i].cx_fp = PX2FP(CX);
     }
 }
 
-// Alterna recta / chicane (fase par) y curva izq / curva dcha (fase impar),
-// con probabilidad y dureza crecientes según "stage". Estructura idéntica
-// al original; solo las amplitudes en píxeles pasan por PXQ().
+// Elige el siguiente tramo de carretera totalmente al azar (tipo Y
+// dirección), en vez de alternar en una secuencia fija recta/izda/
+// recta/dcha como antes -- con la secuencia fija, en cuanto aprendías el
+// patrón podías anticipar hacia dónde venía la siguiente curva. Ahora
+// cada tramo es independiente: puede haber dos curvas seguidas hacia el
+// mismo lado, una recta corta, una chicane... Los tramos también duran
+// menos ticks que antes, así que hace falta corregir con el volante de
+// forma mucho más continua.
 static void next_curve_segment(void) {
     int s = clampi(stage - 1, 0, 7);
+    int sign = rnd(2) ? 1 : -1;
 
-    curve_phase = (curve_phase + 1) & 3;
+    int straight_prob = clampi(16 - s*2, 4, 16);   // cada vez menos recta según sube el stage
+    int chicane_prob   = 20;
+    int hard_prob       = clampi(28 + s*4, 28, 56);
+    // el resto (100 - straight - chicane - hard) es curva suave
 
-    // Probabilidades y amplitudes más agresivas que la primera pasada: se
-    // busca que desde el stage 1 ya haga falta corregir con el volante casi
-    // todo el rato, no solo en las rectas largas (ver feedback de "muy fácil").
-    if (curve_phase == 0 || curve_phase == 2) {
-        int chicane_prob = 20 + s*5;
-        if (rnd(100) < chicane_prob) {
-            int sign = (curve_phase == 2) ? 1 : -1;
-            curve_target     = PXQ(3 + rnd(3)) * sign;
-            curve_ticks_left = STRAIGHT_MIN + rnd(STRAIGHT_MAX - STRAIGHT_MIN);
-        } else {
-            int st_min = STRAIGHT_MIN + (7 - s)*3;
-            int st_rnd = (STRAIGHT_MAX - STRAIGHT_MIN) - s*4;
-            if (st_rnd < 16) st_rnd = 16;
-            curve_target     = 0;
-            curve_ticks_left = st_min + rnd(st_rnd);
-        }
+    int r = rnd(100);
+
+    if (r < straight_prob) {
+        curve_target     = 0;
+        curve_ticks_left = STRAIGHT_MIN + rnd(STRAIGHT_MAX - STRAIGHT_MIN);
+    } else if (r < straight_prob + chicane_prob) {
+        curve_target     = PXQ(3 + rnd(3)) * sign;
+        curve_ticks_left = CHICANE_MIN + rnd(CHICANE_MAX - CHICANE_MIN);
+    } else if (r < straight_prob + chicane_prob + hard_prob) {
+        curve_target     = PXQ(7 + rnd(5 + s)) * sign;
+        curve_ticks_left = CURVE_HARD_MIN + rnd(CURVE_HARD_MAX - CURVE_HARD_MIN);
     } else {
-        int sign = (curve_phase == 1) ? -1 : 1;
-        int hard_prob = 30 + s*8;
-        if (rnd(100) < hard_prob) {
-            curve_target     = PXQ(7 + rnd(5 + s)) * sign;
-            curve_ticks_left = CURVE_HARD_MIN + rnd(CURVE_HARD_MAX - CURVE_HARD_MIN);
-        } else {
-            curve_target     = PXQ(3 + rnd(4)) * sign;
-            curve_ticks_left = CURVE_SOFT_MIN + rnd(CURVE_SOFT_MAX - CURVE_SOFT_MIN);
-        }
+        curve_target     = PXQ(3 + rnd(4)) * sign;
+        curve_ticks_left = CURVE_SOFT_MIN + rnd(CURVE_SOFT_MAX - CURVE_SOFT_MIN);
     }
 }
 
@@ -680,6 +703,20 @@ static void demo_ai(void) {
 static void nd_tick(void) {
     blink++;
 
+    // Vacía el delta pendiente del volante en cualquier estado que no
+    // sea "conduciendo" (título, aturdido tras un choque, game over,
+    // marcador). controls_get_raw_delta() acumula movimiento desde la
+    // última vez que se leyó -- si no se lee mientras no controlas el
+    // coche, todo lo que gires el volante en el título o durante el
+    // choque se queda pendiente y se aplicaba de golpe en el primer
+    // tick de vuelta a ND_PLAYING (el volante "saltaba" en vez de
+    // arrancar recto, aunque steer_angle ya se pusiera a 0 a mano).
+    // En modo demo no hace falta: el chequeo de "any" de abajo ya lee
+    // (y por tanto consume) el delta él solo.
+    if (!demo && state != ND_PLAYING) {
+        (void)controls_get_raw_delta(0);
+    }
+
     if (demo) {
         bool any = controls_menu_select()
                 || controls_get_raw_delta(0) != 0
@@ -691,6 +728,8 @@ static void nd_tick(void) {
     switch (state) {
 
     case ND_TITLE:
+        sound_engine_stop();
+        sound_skid_stop();
         if (controls_button_pressed(BTN_ENC2_SW)) { g_done = true; break; }
         if (controls_menu_select()) {
             game_init();
@@ -727,6 +766,23 @@ static void nd_tick(void) {
         play_ticks++;
         km_acc_fp += (uint32_t)road_speed;
 
+        // Motor: el tono sube con la velocidad actual.
+        sound_engine_set_speed(
+            (uint8_t)clampi((int)(road_speed * 255 / SPEED_MAX), 0, 255)
+        );
+
+        // Derrape: velocidad alta + volante girado a fondo (ambos por
+        // encima de ~60% de su máximo). Ninguno de los dos umbrales es
+        // sagrado -- si se activa demasiado (o demasiado poco), son los
+        // primeros números a tocar.
+        {
+            int32_t steer_abs = steer_angle < 0 ? -steer_angle : steer_angle;
+            bool skidding = (road_speed > SPEED_MAX * 3/5)
+                         && (steer_abs  > STEER_LIMIT * 3/5);
+            if (skidding) sound_skid_start();
+            else          sound_skid_stop();
+        }
+
         if (km_acc_fp >= km_stage_target) {
             km_acc_fp        = 0;
             countdown_ticks  += COUNTDOWN_BONUS;
@@ -756,6 +812,8 @@ static void nd_tick(void) {
                 countdown_ticks = 0;
                 spawn_explosion(CX, DASH_Y-6, 16);
                 road_speed = 0;
+                sound_engine_stop();
+                sound_skid_stop();
                 sound_effect_explosion();
                 pause_ticks = TICKS_S*2;
                 state = ND_GAME_OVER;
@@ -774,6 +832,8 @@ static void nd_tick(void) {
             for (int i = 0; i < NUM_POSTS; i++) posts[i].cx_fp = PX2FP(CX);
             countdown_ticks -= 8*TICKS_S;    // antes 5s -- salirse pesa más
             if (countdown_ticks < 0) countdown_ticks = 0;
+            sound_engine_set_speed(0);
+            sound_skid_stop();
             sound_effect_explosion();
             pause_ticks       = TICKS_S*3/2;
             crash_flash_ticks = 10;
@@ -794,6 +854,8 @@ static void nd_tick(void) {
         break;
 
     case ND_GAME_OVER:
+        sound_engine_stop();
+        sound_skid_stop();
         update_particles();
         if (--pause_ticks <= 0 && controls_menu_select()) {
             if (!demo && highscores_is_top(ND_GAME_ID, player_score)) {
@@ -898,6 +960,11 @@ void game_night_driver_run(game_mode_t mode) {
         sound_update();
         sleep_ms(1);
     }
+
+    // Por si se sale del juego (ENC2) en mitad de una partida, con el
+    // motor o el derrape todavía sonando.
+    sound_engine_stop();
+    sound_skid_stop();
 
     highscores_flush();
 }

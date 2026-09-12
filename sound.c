@@ -499,6 +499,47 @@ static absolute_time_t channel2_siren_next_change;
 #define SIREN_VOLUME      40   // más bajo que los efectos, para que no los tape
 
 /*
+ * Motor -- zumbido continuo cuyo tono sube con la velocidad. Comparte
+ * el CANAL 2 con la sirena y la música de menú (los tres son "algo
+ * continuo de fondo", nunca suenan dos a la vez): quien se active el
+ * último se queda el canal, igual que ya hacía sound_start_menu_music()
+ * con channel2_siren_active. Pensado para juegos de conducción
+ * (Night Driver): se llama sound_engine_set_speed() una vez por frame
+ * con la velocidad actual, y sound_engine_stop() al salir del juego.
+ */
+static volatile bool   channel2_engine_active = false;
+static volatile uint16_t channel2_engine_last_freq = 0;
+
+#define ENGINE_FREQ_MIN   55    // ralentí
+#define ENGINE_FREQ_MAX  260    // a fondo
+#define ENGINE_VOLUME     50    // de fondo -- más flojo que un efecto, no debe tapar el resto
+
+/*
+ * Derrape -- ruido continuo mientras el coche patina (velocidad alta +
+ * volante girado a fondo, típicamente). Usa el CANAL 1 -- libre
+ * durante la partida por el mismo motivo que el canal 2 con la sirena:
+ * la música de menú (canales 1+2) ya se ha parado con
+ * sound_stop_menu_music() antes de que empiece a jugarse.
+ *
+ * Es un tono agudo en diente de sierra (WAVE_SAW, la forma más áspera/
+ * brillante de las que hay) que además "tiembla" de frecuencia muy
+ * deprisa -- channel1_skid_next_change, avanzado desde sound_update()
+ * igual que hace la sirena con el canal 2, pero con un paso mucho más
+ * corto (SKID_STEP_MS) y un salto de frecuencia aleatorio en vez de
+ * alternar entre dos notas fijas. Sin ese temblor sonaría a un pitido
+ * limpio y musical; con él suena áspero e inestable, más parecido a un
+ * chirrido de neumático de verdad.
+ */
+static volatile bool channel1_skid_active = false;
+static uint32_t channel1_skid_rng = 1;
+static absolute_time_t channel1_skid_next_change;
+
+#define SKID_FREQ_BASE     2000   // centro del chirrido -- agudo
+#define SKID_FREQ_JITTER    700   // salto máximo +/- en cada paso
+#define SKID_STEP_MS         18   // cada cuánto tiembla -- rápido y áspero
+#define SKID_VOLUME           60
+
+/*
  * Expiración del tono genérico de sound_play_tone() (canal 3).
  * Antes, duration_ms se ignoraba por completo y el tono se quedaba
  * sonando indefinidamente. Se comprueba en sound_update(), que ya
@@ -518,6 +559,7 @@ static absolute_time_t channel3_tone_expiry;
  */
 static void configure_channel(volatile audio_channel_t *channel, uint16_t frequency, uint16_t volume, uint8_t waveform);
 static void disable_channel(volatile audio_channel_t *channel);
+static void channel_set_frequency(volatile audio_channel_t *channel, uint16_t frequency);
 
 /*
  * Secuenciador simple de canal 3, para melodías cortas no
@@ -728,6 +770,34 @@ static void disable_channel(
 )
 {
     channel->active = false;
+}
+
+
+/*
+ * Cambia SOLO la frecuencia de un canal ya activo, sin resetear la
+ * fase ni tocar volumen/forma de onda -- a diferencia de
+ * configure_channel(), que reinicia la fase en cada llamada (pensado
+ * para notas discretas: un pequeño "clic" de retrigger no se nota en
+ * un beep de 50ms). Para un tono que cambia de frecuencia de forma
+ * CONTINUA y gradual -- el motor, actualizado una vez por frame según
+ * la velocidad -- resetear la fase en cada actualización metería un
+ * chasquido constante: sonaría como un zumbido sucio en vez de un
+ * barrido de tono suave. Si el canal no está activo, no hace nada
+ * (llama primero a configure_channel() para arrancarlo).
+ */
+static void channel_set_frequency(
+    volatile audio_channel_t *channel,
+    uint16_t frequency
+)
+{
+    uint32_t save = save_and_disable_interrupts();
+
+    if (channel->active) {
+        channel->frequency = frequency;
+        channel->phase_increment = frequency_to_phase_increment(frequency);
+    }
+
+    restore_interrupts(save);
 }
 
 
@@ -1246,9 +1316,10 @@ void sound_start_menu_music(void)
 
     menu_music_playing = true;
 
-    // La sirena del platillo también usa el canal 2 -- si por lo que
-    // sea estuviera sonando, la música de menú manda.
-    channel2_siren_active = false;
+    // La sirena del platillo y el motor también usan el canal 2 -- si
+    // por lo que sea estuvieran sonando, la música de menú manda.
+    channel2_siren_active  = false;
+    channel2_engine_active = false;
 
 
     configure_channel(
@@ -1377,6 +1448,27 @@ void sound_update(void)
             WAVE_TRIANGLE
         );
         channel2_siren_next_change = make_timeout_time_ms(SIREN_STEP_MS);
+    }
+
+    // Avanza el temblor de frecuencia del chirrido de derrape (canal 1)
+    // -- xorshift32 minúsculo, no hace falta que sea buen azar, solo
+    // que salte de forma poco predecible. channel_set_frequency() en
+    // vez de configure_channel() para no resetear la fase en cada
+    // salto (18ms es muy seguido -- con reset de fase sonaría a un
+    // "tac-tac-tac" en vez de a un chirrido continuo).
+    if (
+        channel1_skid_active &&
+        time_reached(channel1_skid_next_change)
+    ) {
+        channel1_skid_rng ^= channel1_skid_rng << 13;
+        channel1_skid_rng ^= channel1_skid_rng >> 17;
+        channel1_skid_rng ^= channel1_skid_rng << 5;
+
+        uint16_t jitter = (uint16_t)(channel1_skid_rng % (SKID_FREQ_JITTER * 2));
+        uint16_t freq   = (SKID_FREQ_BASE - SKID_FREQ_JITTER) + jitter;
+
+        channel_set_frequency(&channel1, freq);
+        channel1_skid_next_change = make_timeout_time_ms(SKID_STEP_MS);
     }
 
     if (!menu_music_playing) {
@@ -1618,6 +1710,7 @@ void sound_siren_start(void)
         sound_init();
     }
 
+    channel2_engine_active = false;   // el canal 2 es de quien lo pida el último
     channel2_siren_active = true;
     channel2_siren_phase  = 0;
 
@@ -1637,6 +1730,107 @@ void sound_siren_stop(void)
 
     disable_channel(
         &channel2
+    );
+}
+
+
+/*
+ * Motor -- zumbido continuo (canal 2) cuyo tono sube con la
+ * velocidad. Pensada para llamarse una vez por frame con la
+ * velocidad actual del juego: "speed_pct" va de 0 (ralentí) a 255
+ * (a fondo). No hace falta limitar tú la frecuencia de llamada --
+ * internamente usa channel_set_frequency() en vez de reconfigurar el
+ * canal entero, así que un valor que cambia cada frame no mete
+ * chasquidos (ver el comentario junto a channel_set_frequency()).
+ */
+void sound_engine_set_speed(uint8_t speed_pct)
+{
+    if (!sound_initialized) {
+        sound_init();
+    }
+
+    uint16_t freq =
+        ENGINE_FREQ_MIN +
+        (uint16_t)(
+            ((uint32_t)(ENGINE_FREQ_MAX - ENGINE_FREQ_MIN) * speed_pct) / 255
+        );
+
+    if (!channel2_engine_active) {
+        // Primer arranque: el motor se queda con el canal 2, igual que
+        // ya hacía sound_start_menu_music() con la sirena.
+        channel2_siren_active = false;
+        menu_music_playing    = false;
+
+        channel2_engine_active  = true;
+        channel2_engine_last_freq = freq;
+
+        configure_channel(
+            &channel2,
+            freq,
+            ENGINE_VOLUME,
+            WAVE_SAW
+        );
+        return;
+    }
+
+    if (freq != channel2_engine_last_freq) {
+        channel2_engine_last_freq = freq;
+        channel_set_frequency(&channel2, freq);
+    }
+}
+
+void sound_engine_stop(void)
+{
+    channel2_engine_active = false;
+
+    disable_channel(
+        &channel2
+    );
+}
+
+
+/*
+ * Derrape -- chirrido agudo (canal 1) mientras se cumplan las
+ * condiciones de derrape (típicamente velocidad alta + volante muy
+ * girado). Llamar sound_skid_start() en cada frame mientras se derrape
+ * y sound_skid_stop() en cuanto se deje de cumplir -- llamar start()
+ * repetidamente mientras ya está activo no hace nada (el temblor de
+ * frecuencia lo lleva sound_update(), no hace falta reconfigurar el
+ * canal en cada llamada).
+ */
+void sound_skid_start(void)
+{
+    if (!sound_initialized) {
+        sound_init();
+    }
+
+    if (channel1_skid_active) {
+        return;
+    }
+
+    channel1_skid_active = true;
+    channel1_skid_rng    = 0x9E3779B9u;
+
+    configure_channel(
+        &channel1,
+        SKID_FREQ_BASE,
+        SKID_VOLUME,
+        WAVE_SAW
+    );
+
+    channel1_skid_next_change = make_timeout_time_ms(SKID_STEP_MS);
+}
+
+void sound_skid_stop(void)
+{
+    if (!channel1_skid_active) {
+        return;
+    }
+
+    channel1_skid_active = false;
+
+    disable_channel(
+        &channel1
     );
 }
 
