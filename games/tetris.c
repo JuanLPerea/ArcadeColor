@@ -722,6 +722,7 @@ static void tt_tick(void) {
             sound_stop_menu_music();
             start_game();
             state = TT_PLAYING;
+            sound_start_tetris_music();
         }
         break;
     }
@@ -738,6 +739,7 @@ static void tt_tick(void) {
         for (int p = 0; p < num_players; p++) if (pl[p].active) any_active = true;
 
         if (!any_active) {
+            sound_stop_tetris_music();
             sound_effect_game_over();
             draw_playing_frame();
             for (int p = 0; p < num_players; p++) {
@@ -788,6 +790,7 @@ void game_tetris_run(game_mode_t mode) {
     if (demo) {
         start_game();
         state = TT_PLAYING;
+        sound_start_tetris_music();
     } else {
         state = TT_SELECT;
         draw_select_screen();
@@ -800,6 +803,12 @@ void game_tetris_run(game_mode_t mode) {
         sound_update();
         sleep_ms(8);
     }
+
+    // Por si se sale a mitad de partida (p.ej. demo interrumpida por
+    // el usuario): no dejar la música de Tetris sonando de fondo al
+    // volver al menú. Si ya se había parado (game over normal), esto
+    // no hace nada raro -- igual que sound_stop_pacman_intro().
+    sound_stop_tetris_music();
 
     highscores_flush();
 }

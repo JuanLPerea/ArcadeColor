@@ -138,6 +138,23 @@
  * (sound_engine_stop()/sound_skid_stop()) en el resto de estados y al
  * salir del juego. Si el derrape salta demasiado a menudo o casi nunca,
  * los umbrales "3/5" de ambas condiciones son lo primero a tocar.
+ *
+ * ---------------------------------------------------------------------
+ * 7ª pasada: reset del volante al empezar/tras chocar + banner de meta
+ * ---------------------------------------------------------------------
+ *   - controls_get_raw_delta() acumula movimiento desde la última
+ *     lectura; en título/choque/game over/marcador nadie lo leía, así
+ *     que lo girado en esos momentos se aplicaba de golpe al volver a
+ *     ND_PLAYING (aunque steer_angle ya se pusiera a 0 a mano). Ahora
+ *     nd_tick() lo vacía cada tick mientras state != ND_PLAYING.
+ *   - Banner de "META" a cuadros: finish_post es un Post más (mismo
+ *     y_fp/cx_fp que posts[], actualizado igual en
+ *     update_curve_and_posts(), así que seguirá la curva de la
+ *     carretera) pero se dibuja como una franja de lado a lado en vez
+ *     de dos marcas en los bordes, y no "envuelve" al llegar abajo --
+ *     desaparece sola. Se dispara al subir de stage (mismo momento que
+ *     stage_bonus_flash) y va acompañado de un rótulo "META" grande en
+ *     pantalla mientras dura el flash (~3s).
  */
 
 #include <stdlib.h>
@@ -252,7 +269,7 @@ static const int16_t SIN32[32] = {
 // del ajuste de dificultad, STEER_LIMIT/9 (el "contravalor" máximo del
 // volante, ver update_curve_and_posts) ahora supera con margen la curva
 // más cerrada posible en el stage más difícil.
-#define STEER_LIMIT  PXQ(270)
+#define STEER_LIMIT  PXQ(220)
 
 // ---------------------------------------------------------------------------
 // Duraciones de tramo de carretera (en ticks -- no se reescalan, ver cabecera)
@@ -270,7 +287,7 @@ static const int16_t SIN32[32] = {
 // Etapas / cuenta atrás
 // ---------------------------------------------------------------------------
 #define COUNTDOWN_START (60 * TICKS_S)
-#define COUNTDOWN_BONUS (20 * TICKS_S)
+#define COUNTDOWN_BONUS (60 * TICKS_S)
 #define KM_BASE  1875000UL   // ver derivación en la cabecera (orig. 4 500 000 * 5/12)
 
 // ---------------------------------------------------------------------------
@@ -361,6 +378,13 @@ static int32_t horizon_cx_fp;
 static int32_t steer_angle;
 static int32_t curve_target;
 static int     curve_ticks_left;
+
+// Banner de "META" a cuadros: se comporta como un poste más (misma
+// profundidad/curva que posts[]), pero dibuja una franja a cuadros de
+// lado a lado de la carretera en vez de dos postes en los bordes.
+// Aparece al pasar de stage y desaparece sola al cruzar el salpicadero.
+static Post finish_post;
+static bool finish_line_active;
 
 static int      stage;
 static int32_t  countdown_ticks;
@@ -492,6 +516,22 @@ static void update_curve_and_posts(void) {
             posts[i].cx_fp  = horizon_cx_fp;
         }
     }
+
+    // El banner de meta se mueve igual que un poste, pero sin
+    // "envolver" al llegar abajo -- simplemente desaparece.
+    if (finish_line_active) {
+        finish_post.y_fp += road_speed;
+
+        int t = (FP2PX(finish_post.y_fp) - HORIZ_Y) * 256 / ROAD_RANGE;
+        if (t < 0) t = 0;
+        if (t > 256) t = 256;
+
+        finish_post.cx_fp += (road_curve_vel - steer_vel) * t / 256;
+
+        if (finish_post.y_fp >= PX2FP(BASE_Y)) {
+            finish_line_active = false;
+        }
+    }
 }
 
 static bool check_offroad(void) {
@@ -557,6 +597,45 @@ static void draw_road(void) {
             renderer_fill_rect(plx, ry, sz, rh, COLOR_WHITE);
         if (prx >= PLAY_X && prx+sz < PLAY_X+PLAY_W)
             renderer_fill_rect(prx, ry, sz, rh, COLOR_WHITE);
+    }
+
+    // Banner de "META" a cuadros, de lado a lado de la carretera --
+    // mismo cálculo de perspectiva (t, t2, hw) que los postes de arriba,
+    // solo que en vez de dos marcas en los bordes es una franja entera.
+    if (finish_line_active) {
+        int y = FP2PX(finish_post.y_fp);
+        if (y >= HORIZ_Y && y < BASE_Y) {
+            int t = (y - HORIZ_Y) * 256 / ROAD_RANGE;
+            if (t < 0) t = 0;
+            if (t > 256) t = 256;
+            int t2 = t*t/256;
+
+            int barh = 2 + t2*5/256;           // ~2px lejos .. ~7px cerca
+            int cx   = FP2PX(finish_post.cx_fp);
+            int hw   = ROAD_HW_FAR + (ROAD_HW_NEAR - ROAD_HW_FAR) * t2 / 256;
+
+            int ry = y - barh/2;
+            int rh = barh;
+            if (ry < HORIZ_Y+1)   { rh -= (HORIZ_Y+1 - ry); ry = HORIZ_Y+1; }
+            if (ry + rh > BASE_Y) { rh = BASE_Y - ry; }
+
+            if (rh > 0) {
+                // Blanco/amarillo alternando (negro sería invisible sobre
+                // el fondo de la carretera) -- ancho de cuadro creciente
+                // con la perspectiva, igual que el resto de la carretera.
+                int sq = 3 + t2*8/256;
+                if (sq < 3) sq = 3;
+                int l = cx - hw, r = cx + hw;
+                if (l < PLAY_X) l = PLAY_X;
+                if (r > PLAY_X+PLAY_W) r = PLAY_X+PLAY_W;
+                int idx = 0;
+                for (int x = l; x < r; x += sq, idx++) {
+                    int w = sq;
+                    if (x + w > r) w = r - x;
+                    renderer_fill_rect(x, ry, w, rh, (idx & 1) ? COLOR_YELLOW : COLOR_WHITE);
+                }
+            }
+        }
     }
 }
 
@@ -691,6 +770,7 @@ static void game_init(void) {
     km_stage_target   = KM_BASE;
     stage_bonus_flash = false;
     stage_bonus_ticks = 0;
+    finish_line_active = false;
     crash_flash_ticks = 0;
     init_posts();
 }
@@ -791,6 +871,9 @@ static void nd_tick(void) {
             for (int s = 1; s < stage; s++) km_stage_target = km_stage_target*5/4;
             stage_bonus_flash = true;
             stage_bonus_ticks = TICKS_S*3;
+            finish_line_active = true;
+            finish_post.y_fp   = PX2FP(HORIZ_Y);
+            finish_post.cx_fp  = horizon_cx_fp;
             sound_effect_success();
         }
         if (stage_bonus_ticks > 0 && --stage_bonus_ticks == 0) stage_bonus_flash = false;
@@ -902,8 +985,11 @@ static void nd_draw(void) {
             renderer_fill_rect(PLAY_X+PLAY_W-3, PLAY_Y, 3, PLAY_H, COLOR_RED);
         }
         if (state == ND_CRASH && bon)
-            renderer_draw_text(centered_x("CRASH!",2), HORIZ_Y + ROAD_RANGE/2 - 7,
-                                "CRASH!", COLOR_RED, COLOR_BLACK, 2);
+            renderer_draw_text(centered_x("CRASH",2), HORIZ_Y + ROAD_RANGE/2 - 7,
+                                "CRASH", COLOR_RED, COLOR_BLACK, 2);
+        if (stage_bonus_flash)
+            renderer_draw_text(centered_x("META",3), HORIZ_Y + ROAD_RANGE/3,
+                                "META", COLOR_YELLOW, COLOR_BLACK, 3);
         if (demo && bon)
             renderer_draw_text(centered_x("DEMO",1), DASH_Y-10, "DEMO", COLOR_YELLOW, COLOR_BLACK, 1);
         renderer_flush();
