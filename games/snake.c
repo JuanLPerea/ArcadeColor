@@ -133,6 +133,7 @@ static int centered_x(const char *text, int scale) {
 #define COLOR_HEAD  COLOR_WHITE
 #define COLOR_WALL  0x2B70   // azul acero, distinto de P1/P2 para no confundir obstaculos con serpientes
 #define COLOR_FOOD  COLOR_GREEN
+#define COLOR_SFOOD COLOR_RED   // comida especial (+5 de longitud)
 
 // ---------------------------------------------------------------------------
 // Tiempo delta real -- identico mecanismo que el resto del proyecto.
@@ -167,6 +168,7 @@ typedef struct {
     bool    human;       // false = controlada por la IA
     int32_t score;
     int     lives;       // 0 = eliminada para el resto de la partida (no vuelve a aparecer en begin_round())
+    int     pending_growth;   // segmentos que quedan por crecer -- ver comida especial mas abajo
 } Snake;
 
 static Snake snakes[2];
@@ -181,6 +183,7 @@ static void reset_snake(Snake *s, int x, int y, int dx, int dy) {
     s->x[2] = (int8_t)(x-2*dx); s->y[2] = (int8_t)(y-2*dy);
     s->dx = dx; s->dy = dy; s->qdx = dx; s->qdy = dy;
     s->alive = true;
+    s->pending_growth = 0;
 }
 
 static void snake_step(Snake *s, int nx, int ny, bool grow) {
@@ -206,6 +209,20 @@ static bool wall[ARENA_ROWS][COLS];
 
 typedef struct { int x, y; bool active; } Food;
 static Food food;
+
+// Comida especial: roja, +5 de longitud (repartidos en los 5
+// siguientes movimientos reales -- ver Snake.pending_growth, para
+// que cada segmento nuevo sea siempre una celda por la que la
+// serpiente ha pasado de verdad, nunca una posicion inventada de
+// golpe). Aparece con cierta probabilidad al comer la comida normal,
+// y desaparece sola si no se recoge a tiempo.
+#define SPECIAL_FOOD_GROWTH    5
+#define SPECIAL_FOOD_SCORE_MUL 500   // puntos = SPECIAL_FOOD_SCORE_MUL * nivel
+#define SPECIAL_FOOD_CHANCE    30    // % de probabilidad de aparecer al comer la comida normal
+#define SPECIAL_FOOD_LIFE_MS   6000  // tiempo antes de desaparecer si no se recoge
+
+typedef struct { int x, y; bool active; int32_t life_ms; } SpecialFood;
+static SpecialFood sfood;
 
 static void make_arena(int level) {
     memset(wall, 0, sizeof(wall));
@@ -234,10 +251,23 @@ static void spawn_food(void) {
         int x = 1 + rnd(COLS-2), y = 1 + rnd(ARENA_ROWS-2);
         if (wall[y][x]) continue;
         if (cell_occupied_by_snake(x, y)) continue;
+        if (sfood.active && sfood.x == x && sfood.y == y) continue;
         food.x = x; food.y = y; food.active = true;
         return;
     }
     food.active = false;   // no se encontro hueco libre (muy improbable)
+}
+
+static void spawn_special_food(void) {
+    for (int tries = 0; tries < 500; tries++) {
+        int x = 1 + rnd(COLS-2), y = 1 + rnd(ARENA_ROWS-2);
+        if (wall[y][x]) continue;
+        if (cell_occupied_by_snake(x, y)) continue;
+        if (food.active && food.x == x && food.y == y) continue;
+        sfood.x = x; sfood.y = y; sfood.active = true; sfood.life_ms = SPECIAL_FOOD_LIFE_MS;
+        return;
+    }
+    sfood.active = false;   // no se encontro hueco libre (muy improbable)
 }
 
 // ¿celda bloqueada para la serpiente self_idx? Pared o cuerpo propio
@@ -313,6 +343,8 @@ static void update_and_draw_particles(void) {
     if (any) renderer_flush();
 }
 
+
+
 // ---------------------------------------------------------------------------
 // Estado general de la partida
 // ---------------------------------------------------------------------------
@@ -352,12 +384,26 @@ static void erase_cell(int x, int y) {
     renderer_fill_rect(cell_x(x), cell_y(y), CELL-1, CELL-1, COLOR_BLACK);
 }
 
+// Cuenta atras de la comida especial -- se llama cada tick (no solo
+// en cada paso de movimiento) para que el tiempo de vida corra en
+// tiempo real, igual que el resto de temporizadores del proyecto.
+static void update_special_food(void) {
+    if (!sfood.active) return;
+    sfood.life_ms -= g_elapsed_ms;
+    if (sfood.life_ms <= 0) {
+        erase_cell(sfood.x, sfood.y);
+        sfood.active = false;
+        renderer_flush();
+    }
+}
+
 static void draw_arena_static(void) {
     renderer_clear(COLOR_BLACK);
     for (int r = 0; r < ARENA_ROWS; r++)
         for (int c = 0; c < COLS; c++)
             if (wall[r][c]) draw_cell(c, r, COLOR_WALL);
     if (food.active) draw_cell(food.x, food.y, COLOR_FOOD);
+    if (sfood.active) draw_cell(sfood.x, sfood.y, COLOR_SFOOD);
     for (int s = 0; s < 2; s++) {
         Snake *sn = &snakes[s];
         if (!sn->alive) continue;
@@ -403,6 +449,8 @@ static void restore_arena_rect(int rx, int ry, int rw, int rh) {
             if (wall[r][c]) draw_cell(c, r, COLOR_WALL);
     if (food.active && food.x >= c0 && food.x <= c1 && food.y >= r0 && food.y <= r1)
         draw_cell(food.x, food.y, COLOR_FOOD);
+    if (sfood.active && sfood.x >= c0 && sfood.x <= c1 && sfood.y >= r0 && sfood.y <= r1)
+        draw_cell(sfood.x, sfood.y, COLOR_SFOOD);
     for (int s = 0; s < 2; s++) {
         Snake *sn = &snakes[s];
         if (!sn->alive) continue;
@@ -468,6 +516,7 @@ static void begin_round(void) {
     else                     snakes[1].alive = false;
     make_arena(level);
     spawn_food();
+    sfood.active = false;   // la comida especial no persiste entre rondas
     for (int i = 0; i < MAX_PARTICLES; i++) particles[i].active = false;
     draw_arena_static();
     prev_hud_p1 = prev_hud_p2 = -1; prev_hud_level = -1; prev_hud_lives1 = prev_hud_lives2 = -1;
@@ -481,7 +530,7 @@ static void begin_round(void) {
 
 static void game_reset_full(void) {
     level = 1;
-    next_level_score = 500;
+    next_level_score = 5000;
     snakes[0].score = 0; snakes[1].score = 0;
     snakes[0].human = !demo;
     snakes[1].human = !demo && (n_players == 2);
@@ -574,16 +623,32 @@ static void do_move_step(void) {
             continue;
         }
 
-        bool grow = false;
         if (food.active && nx == food.x && ny == food.y) {
-            grow = true;
+            sn->pending_growth += 1;
             sn->score += 100 * level;
             sound_effect_success();
             uint16_t fcols[2] = { COLOR_FOOD, COLOR_WHITE };
             spawn_burst(cell_x(nx)+CELL/2, cell_y(ny)+CELL/2, 8, fcols, 2);
             spawn_food();
             if (food.active) draw_cell(food.x, food.y, COLOR_FOOD);
+            // Ocasionalmente aparece tambien la comida especial (si
+            // no hay ya una activa), ver cabecera del archivo.
+            if (!sfood.active && rnd(100) < SPECIAL_FOOD_CHANCE) {
+                spawn_special_food();
+                if (sfood.active) draw_cell(sfood.x, sfood.y, COLOR_SFOOD);
+            }
         }
+        if (sfood.active && nx == sfood.x && ny == sfood.y) {
+            sn->pending_growth += SPECIAL_FOOD_GROWTH;
+            sn->score += SPECIAL_FOOD_SCORE_MUL * level;
+            sound_effect_success();
+            uint16_t scols[3] = { COLOR_SFOOD, COLOR_WHITE, COLOR_YELLOW };
+            spawn_burst(cell_x(nx)+CELL/2, cell_y(ny)+CELL/2, 14, scols, 3);
+            sfood.active = false;
+        }
+
+        bool grow = false;
+        if (sn->pending_growth > 0) { grow = true; sn->pending_growth--; }
 
         int old_tail_x = -1, old_tail_y = -1;
         if (!grow) { old_tail_x = seg_x(sn, sn->len-1); old_tail_y = seg_y(sn, sn->len-1); }
@@ -630,7 +695,7 @@ static void do_move_step(void) {
     int32_t combined = snakes[0].score + snakes[1].score;
     if (combined >= next_level_score) {
         level++;
-        next_level_score += 500L * level;
+        next_level_score += 1000L * level;
         sound_effect_victory();
         begin_round();
         state = SN_ROUND_START;
@@ -754,6 +819,7 @@ static void sn_tick(void) {
             do_move_step();   // puede cambiar 'state' (ronda perdida o subida de nivel)
         }
         update_and_draw_particles();
+        update_special_food();
         draw_hud_if_changed(false);
         break;
     }
