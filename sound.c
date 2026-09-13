@@ -1164,6 +1164,103 @@ static absolute_time_t pacman_intro_ch2_next;
 
 
 /* ============================================================
+ * MÚSICA DE TETRIS (IN-GAME)
+ * Korobeiniki ("tema A" de Tetris) — melodía popular rusa de
+ * dominio público, en el arreglo chiptune de 2 voces habitual en
+ * los clones de Tetris.
+ *
+ * Igual que con el jingle de Pac-Man, canal 1 = melodía (triangular)
+ * y canal 2 = bajo/acompañamiento (cuadrada) -- el canal 3 queda
+ * libre para los efectos de la partida (mover, girar, línea, game
+ * over...), que son los que ya usa game_tetris_run().
+ *
+ * A diferencia del jingle de Pac-Man, esto es música de fondo en
+ * bucle: los dos canales NO están sincronizados nota a nota (98
+ * eventos en melodía, 128 en bajo) pero ambos suman exactamente
+ * 37800ms, así que encajan y vuelven a empezar juntos en cada
+ * vuelta -- se avanzan con dos índices/temporizadores
+ * independientes en sound_update(), igual que el jingle de Pac-Man,
+ * solo que al llegar al final se reinicia el índice a 0 en vez de
+ * marcarse como terminado.
+ */
+#define TETRIS_MUSIC_CH1_LEN 98
+#define TETRIS_MUSIC_CH2_LEN 128
+
+static const uint16_t tetris_music_ch1_freq[TETRIS_MUSIC_CH1_LEN] = {
+    659, 494, 523, 587, 523, 494, 440, 440,
+    523, 659, 587, 523, 494, 0, 523, 587,
+    659, 523, 440, 440, 0, 587, 698, 880,
+    784, 698, 659, 523, 659, 587, 523, 494,
+    494, 523, 587, 659, 523, 440, 440, 0,
+    659, 494, 523, 587, 523, 494, 440, 440,
+    523, 659, 587, 523, 494, 0, 523, 587,
+    659, 523, 440, 440, 0, 587, 698, 880,
+    784, 698, 659, 523, 659, 587, 523, 494,
+    494, 523, 587, 659, 523, 440, 440, 0,
+    330, 262, 294, 247, 262, 220, 208, 247,
+    0, 330, 262, 294, 247, 262, 330, 440,
+    415, 0,
+};
+static const uint16_t tetris_music_ch1_dur[TETRIS_MUSIC_CH1_LEN] = {
+    400, 200, 200, 400, 200, 200, 400, 200,
+    200, 400, 200, 200, 400, 200, 200, 400,
+    400, 400, 400, 400, 600, 400, 200, 400,
+    200, 200, 600, 200, 400, 200, 200, 400,
+    200, 200, 400, 400, 400, 400, 400, 400,
+    400, 200, 200, 400, 200, 200, 400, 200,
+    200, 400, 200, 200, 400, 200, 200, 400,
+    400, 400, 400, 400, 600, 400, 200, 400,
+    200, 200, 600, 200, 400, 200, 200, 400,
+    200, 200, 400, 400, 400, 400, 400, 400,
+    800, 800, 800, 800, 800, 800, 800, 400,
+    400, 800, 800, 800, 800, 400, 400, 800,
+    800, 200,
+};
+static const uint16_t tetris_music_ch2_freq[TETRIS_MUSIC_CH2_LEN] = {
+    494, 415, 440, 494, 659, 587, 440, 415,
+    330, 0, 440, 523, 494, 440, 415, 415,
+    330, 0, 415, 440, 494, 523, 440, 330,
+    330, 0, 147, 349, 440, 523, 523, 523,
+    494, 440, 392, 330, 392, 440, 392, 349,
+    330, 415, 330, 415, 440, 494, 415, 523,
+    415, 440, 523, 330, 330, 330, 0, 494,
+    415, 440, 494, 659, 587, 440, 415, 330,
+    0, 440, 523, 494, 440, 415, 415, 330,
+    0, 415, 440, 494, 523, 440, 330, 330,
+    0, 147, 349, 440, 523, 523, 523, 494,
+    440, 392, 330, 392, 440, 392, 349, 330,
+    415, 330, 415, 440, 494, 415, 523, 415,
+    440, 523, 330, 330, 330, 0, 262, 220,
+    247, 208, 220, 165, 165, 208, 0, 262,
+    220, 247, 208, 220, 262, 330, 294, 0,
+};
+static const uint16_t tetris_music_ch2_dur[TETRIS_MUSIC_CH2_LEN] = {
+    400, 200, 200, 200, 100, 100, 200, 200,
+    200, 400, 200, 400, 200, 200, 100, 100,
+    100, 100, 200, 200, 400, 400, 400, 400,
+    400, 400, 200, 400, 200, 200, 100, 100,
+    200, 200, 600, 200, 200, 100, 100, 200,
+    200, 200, 200, 200, 200, 200, 200, 200,
+    200, 100, 100, 200, 400, 400, 400, 400,
+    200, 200, 200, 100, 100, 200, 200, 200,
+    400, 200, 400, 200, 200, 100, 100, 100,
+    100, 200, 200, 400, 400, 400, 400, 400,
+    400, 200, 400, 200, 200, 100, 100, 200,
+    200, 600, 200, 200, 100, 100, 200, 200,
+    200, 200, 200, 200, 200, 200, 200, 200,
+    100, 100, 200, 400, 400, 400, 800, 800,
+    800, 800, 800, 800, 800, 400, 400, 800,
+    800, 800, 800, 400, 400, 800, 800, 200,
+};
+
+static volatile bool tetris_music_playing = false;
+static uint8_t tetris_music_ch1_index;
+static uint8_t tetris_music_ch2_index;
+static absolute_time_t tetris_music_ch1_next;
+static absolute_time_t tetris_music_ch2_next;
+
+
+/* ============================================================
  * INICIALIZACIÓN
  * ============================================================ */
 
@@ -1430,6 +1527,47 @@ void sound_update(void)
 
         if (pacman_intro_ch1_done && pacman_intro_ch2_done) {
             pacman_intro_active = false;
+        }
+
+        restore_interrupts(save);
+    }
+
+    // Avanza la música in-game de Tetris (canal 1 + canal 2, dos
+    // índices independientes -- ver comentario junto a los arrays
+    // tetris_music_ch1/ch2 más arriba). A diferencia del jingle de
+    // Pac-Man, aquí al llegar al final de cada canal se vuelve al
+    // índice 0 en vez de pararse: es música de fondo en bucle.
+    if (tetris_music_playing) {
+        uint32_t save = save_and_disable_interrupts();
+
+        if (time_reached(tetris_music_ch1_next)) {
+            tetris_music_ch1_index++;
+            if (tetris_music_ch1_index >= TETRIS_MUSIC_CH1_LEN) {
+                tetris_music_ch1_index = 0;
+            }
+            configure_channel(
+                &channel1,
+                tetris_music_ch1_freq[tetris_music_ch1_index],
+                CHANNEL1_VOLUME,
+                WAVE_TRIANGLE
+            );
+            tetris_music_ch1_next =
+                make_timeout_time_ms(tetris_music_ch1_dur[tetris_music_ch1_index]);
+        }
+
+        if (time_reached(tetris_music_ch2_next)) {
+            tetris_music_ch2_index++;
+            if (tetris_music_ch2_index >= TETRIS_MUSIC_CH2_LEN) {
+                tetris_music_ch2_index = 0;
+            }
+            configure_channel(
+                &channel2,
+                tetris_music_ch2_freq[tetris_music_ch2_index],
+                CHANNEL2_VOLUME,
+                WAVE_SQUARE
+            );
+            tetris_music_ch2_next =
+                make_timeout_time_ms(tetris_music_ch2_dur[tetris_music_ch2_index]);
         }
 
         restore_interrupts(save);
@@ -2013,4 +2151,62 @@ void sound_stop_pacman_intro(void)
     disable_channel(&channel2);
 
     restore_interrupts(save);
+}
+
+
+/*
+ * Arranca la música in-game de Tetris (canal 1 + canal 2), en bucle
+ * hasta llamar a sound_stop_tetris_music(). Ver notas junto a los
+ * arrays tetris_music_ch1/ch2 más arriba.
+ */
+void sound_start_tetris_music(void)
+{
+    if (!sound_initialized) {
+        sound_init();
+    }
+
+    uint32_t save = save_and_disable_interrupts();
+
+    // Canales 1/2 son "lo único que suena de fondo a la vez" --
+    // igual que hace sound_start_pacman_intro(), esto manda sobre
+    // cualquier otra cosa que estuviera usándolos.
+    menu_music_playing     = false;
+    channel2_siren_active  = false;
+    channel2_engine_active = false;
+    channel1_skid_active   = false;
+    pacman_intro_active    = false;
+
+    tetris_music_playing  = true;
+    tetris_music_ch1_index = 0;
+    tetris_music_ch2_index = 0;
+
+    configure_channel(&channel1, tetris_music_ch1_freq[0], CHANNEL1_VOLUME, WAVE_TRIANGLE);
+    configure_channel(&channel2, tetris_music_ch2_freq[0], CHANNEL2_VOLUME, WAVE_SQUARE);
+
+    tetris_music_ch1_next = make_timeout_time_ms(tetris_music_ch1_dur[0]);
+    tetris_music_ch2_next = make_timeout_time_ms(tetris_music_ch2_dur[0]);
+
+    restore_interrupts(save);
+}
+
+
+/*
+ * Para la música in-game de Tetris (p.ej. al terminar la partida).
+ */
+void sound_stop_tetris_music(void)
+{
+    uint32_t save = save_and_disable_interrupts();
+
+    tetris_music_playing = false;
+
+    disable_channel(&channel1);
+    disable_channel(&channel2);
+
+    restore_interrupts(save);
+}
+
+
+bool sound_tetris_music_is_playing(void)
+{
+    return tetris_music_playing;
 }

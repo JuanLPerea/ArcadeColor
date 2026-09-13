@@ -43,6 +43,17 @@ bool sound_menu_music_is_playing(void);
 
 
 /*
+ * Música in-game de Tetris (Korobeiniki), canales 1+2 en bucle --
+ * el canal 3 (efectos) sigue libre para mover/girar/línea/game over.
+ * Llamar sound_start_tetris_music() al empezar la partida y
+ * sound_stop_tetris_music() al terminarla (game over, o al salir).
+ */
+void sound_start_tetris_music(void);
+void sound_stop_tetris_music(void);
+bool sound_tetris_music_is_playing(void);
+
+
+/*
  * Efectos de sonido.
  *
  * Todos son NO BLOQUEANTES.
