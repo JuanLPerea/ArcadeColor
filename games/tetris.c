@@ -35,6 +35,19 @@
  *    partida.
  *  - Sin hs_input/TT_ENTER_NAME: highscores_enter() bloqueante, como
  *    en los otros juegos.
+ *  - Menu de seleccion rediseñado: ahora es un cursor de 3 opciones
+ *    (1 JUGADOR / 2 JUGADORES / MUSICA ON-OFF) navegable con el
+ *    encoder, en vez del toggle directo 1P<->2P de antes. La tercera
+ *    opcion alterna music_enabled, que solo controla la musica de
+ *    partida (sound_start_tetris_music) -- la musica de menu no se ve
+ *    afectada. Debajo del titulo se dibuja ademas una fila decorativa
+ *    de 7 bloques de color (uno por cada tetrimino), puramente visual.
+ *  - Union de J2 a mitad de partida: en modo 1 jugador, pulsar el
+ *    switch del encoder de J2 (BTN_IDX_ENC2_SW, el mismo boton que
+ *    usa J2 para su hard drop) activa a J2 sin tocar el progreso de
+ *    J1 -- ver activate_player2_midgame(). J1 sigue jugando su
+ *    partida en curso; J2 simplemente arranca su tablero desde cero
+ *    en el lado que antes mostraba "PULSA PARA JUGAR".
  *  - Render incremental: el tablero de cada jugador se compara
  *    celda a celda contra el ultimo fotograma dibujado (como el
  *    borrado dirigido de bricks en breakout.c) en vez de reescribir
@@ -216,6 +229,8 @@ static TtSt state;
 
 static int  blink;
 static int  menu_enc_acc;
+static int  menu_sel = 0;          // 0=1 JUGADOR, 1=2 JUGADORES, 2=MUSICA ON/OFF
+static bool music_enabled = true;  // solo afecta a la musica DURANTE la partida
 static int  pause_ticks;
 static int  demo_ticks;
 static bool g_done;
@@ -635,16 +650,44 @@ static void draw_playing_frame(void) {
     update_bottom_message(bottom, 1);
 }
 
+// Fila decorativa de mini-bloques bajo el titulo, uno por cada
+// tetrimino (mismos colores que PIECE_COLORS) -- puramente visual.
+static void draw_menu_deco(int y) {
+    const int block = 12;
+    const int gap   = 4;
+    int total_w = NUM_PIECES * block + (NUM_PIECES - 1) * gap;
+    int x = (SCREEN_W - total_w) / 2;
+    for (int i = 0; i < NUM_PIECES; i++) {
+        renderer_fill_rect(x + i * (block + gap), y, block, block, PIECE_COLORS[i]);
+    }
+}
+
+// Una linea del menu de seleccion: resaltada con flechas ">  <" y en
+// amarillo si es la opcion actualmente elegida por el cursor.
+static void draw_menu_item(const char *text, int y, bool selected) {
+    char buf[32];
+    if (selected) snprintf(buf, sizeof(buf), "> %s <", text);
+    else          snprintf(buf, sizeof(buf), "  %s  ", text);
+    uint16_t color = selected ? COLOR_YELLOW : COLOR_WHITE;
+    renderer_draw_text(centered_x(buf, 2), y, buf, color, COLOR_BLACK, 2);
+}
+
 static void draw_select_screen(void) {
     renderer_clear(COLOR_BLACK);
-    renderer_draw_text(centered_x("TETRIS", 3), CX==CX?PLAY_Y+30:0, "TETRIS", COLOR_CYAN, COLOR_BLACK, 3);
-    renderer_draw_text(centered_x(num_players==1 ? "- 1 JUGADOR -" : "  1 JUGADOR  ", 2),
-                        PLAY_Y+80, num_players==1 ? "- 1 JUGADOR -" : "  1 JUGADOR  ", COLOR_WHITE, COLOR_BLACK, 2);
-    renderer_draw_text(centered_x(num_players==2 ? "- 2 JUGADORES -" : "  2 JUGADORES  ", 2),
-                        PLAY_Y+106, num_players==2 ? "- 2 JUGADORES -" : "  2 JUGADORES  ", COLOR_WHITE, COLOR_BLACK, 2);
-    renderer_draw_text(centered_x("GIRA PARA CAMBIAR - PULSA PARA JUGAR", 1), PLAY_Y+141,
-                        "GIRA PARA CAMBIAR - PULSA PARA JUGAR", COLOR_WHITE, COLOR_BLACK, 1);
-    renderer_draw_text(centered_x("GIRO=MOVER  BOTON A=ROTAR  BOTON B=CAIDA  CLIC GIRO=CAIDA RAPIDA", 1), PLAY_Y+158,
+
+    renderer_draw_text(centered_x("TETRIS", 3), PLAY_Y + 8, "TETRIS", COLOR_CYAN, COLOR_BLACK, 3);
+    draw_menu_deco(PLAY_Y + 40);
+
+    char music_label[24];
+    snprintf(music_label, sizeof(music_label), "MUSICA: %s", music_enabled ? "ON" : "OFF");
+
+    draw_menu_item("1 JUGADOR",    PLAY_Y + 70,  menu_sel == 0);
+    draw_menu_item("2 JUGADORES",  PLAY_Y + 96,  menu_sel == 1);
+    draw_menu_item(music_label,    PLAY_Y + 122, menu_sel == 2);
+
+    renderer_draw_text(centered_x("GIRA PARA ELEGIR - PULSA PARA CONFIRMAR", 1), PLAY_Y+150,
+                        "GIRA PARA ELEGIR - PULSA PARA CONFIRMAR", COLOR_WHITE, COLOR_BLACK, 1);
+    renderer_draw_text(centered_x("GIRO=MOVER  BOTON A=ROTAR  BOTON B=CAIDA  CLIC GIRO=CAIDA RAPIDA", 1), PLAY_Y+165,
                         "GIRO=MOVER  BOTON A=ROTAR  BOTON B=CAIDA  CLIC GIRO=CAIDA RAPIDA", COLOR_WHITE, COLOR_BLACK, 1);
     prev_center_msg[0] = '\0';
     prev_bottom_msg[0] = '\0';
@@ -689,6 +732,31 @@ static void start_game(void) {
     blink = 0;
 }
 
+// Union de J2 a mitad de partida: si la partida era de 1 jugador y se
+// pulsa el switch del encoder de J2 (mismo boton que su hard drop),
+// J2 se suma sin reiniciar nada de J1 -- su marcador/tablero/nivel
+// siguen intactos, solo se activa el segundo jugador y arranca su
+// propio tablero desde cero, como si hubiera empezado con el.
+static void activate_player2_midgame(void) {
+    num_players = 2;
+    player_reset(&pl[1]);
+    demo_ai_timer[1] = 0;
+
+    // draw_field_static() no dibujo las etiquetas de J2 porque cuando
+    // se llamo la partida era de 1 jugador (solo puso el aviso
+    // "PULSA PARA JUGAR" en su tablero) -- las anadimos ahora. El
+    // propio tablero de J2 (que borra ese aviso) y su HUD (caja de
+    // siguiente pieza, puntuacion, nivel) se pintan solos en la
+    // siguiente llamada a draw_playing_frame(), que ya recorre hasta
+    // num_players-1 y detecta todo como "cambiado" por ser la primera
+    // vez que se dibuja ese indice.
+    renderer_draw_text(centered_x("J2", 2), HUD2_Y + HUD_TAG_OFF, "J2", COLOR_P1, COLOR_BLACK, 2);
+    renderer_draw_text(centered_x("SIGUIENTE", 1), HUD2_Y + HUD_NEXTLBL_OFF, "SIGUIENTE", COLOR_WHITE, COLOR_BLACK, 1);
+    renderer_flush();
+
+    sound_effect_select();
+}
+
 // ---------------------------------------------------------------------------
 // Tick principal
 // ---------------------------------------------------------------------------
@@ -715,14 +783,22 @@ static void tt_tick(void) {
         int d = controls_get_raw_delta(0);
         if (d) {
             menu_enc_acc += d;
-            if (menu_enc_acc >= 2)  { num_players = (num_players==1)?2:1; menu_enc_acc = 0; draw_select_screen(); }
-            if (menu_enc_acc <= -2) { num_players = (num_players==1)?2:1; menu_enc_acc = 0; draw_select_screen(); }
+            if (menu_enc_acc >= 2)  { menu_sel = (menu_sel + 1) % 3; menu_enc_acc = 0; sound_effect_move(); draw_select_screen(); }
+            if (menu_enc_acc <= -2) { menu_sel = (menu_sel + 2) % 3; menu_enc_acc = 0; sound_effect_move(); draw_select_screen(); }
         }
         if (controls_menu_select()) {
-            sound_stop_menu_music();
-            start_game();
-            state = TT_PLAYING;
-            sound_start_tetris_music();
+            if (menu_sel == 2) {
+                // No inicia partida: solo alterna la musica in-game y redibuja.
+                music_enabled = !music_enabled;
+                sound_effect_select();
+                draw_select_screen();
+            } else {
+                num_players = (menu_sel == 0) ? 1 : 2;
+                sound_stop_menu_music();
+                start_game();
+                state = TT_PLAYING;
+                if (music_enabled) sound_start_tetris_music();
+            }
         }
         break;
     }
@@ -731,6 +807,9 @@ static void tt_tick(void) {
         if (demo) {
             for (int p = 0; p < num_players; p++) ai_tick(&pl[p], p);
         } else {
+            if (num_players == 1 && controls_button_pressed(BTN_IDX_ENC2_SW)) {
+                activate_player2_midgame();
+            }
             for (int p = 0; p < num_players; p++) handle_player_input(&pl[p], p);
         }
         for (int p = 0; p < num_players; p++) player_gravity_tick(&pl[p], elapsed_ms);
@@ -792,6 +871,7 @@ void game_tetris_run(game_mode_t mode) {
         state = TT_PLAYING;
         sound_start_tetris_music();
     } else {
+        menu_sel = (num_players == 2) ? 1 : 0;
         state = TT_SELECT;
         draw_select_screen();
         sound_start_menu_music();

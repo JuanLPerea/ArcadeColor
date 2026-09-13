@@ -38,6 +38,12 @@
  *    mapean a los efectos que sí tenemos.
  *  - Sin hs_input/AS_ENTER_NAME: highscores_enter() bloqueante,
  *    como en los otros dos juegos.
+ *  - Pantalla de seleccion rediseñada: mismo estilo de cursor que
+ *    tetris.c (opcion resaltada con flechas ">  <" en amarillo), y un
+ *    grafico decorativo bajo el titulo -- una nave con su llama de
+ *    thrust y dos asteroides, dibujados con las mismas funciones
+ *    vectoriales draw_ship()/draw_ast() de la partida real (ver
+ *    draw_menu_deco()), no un dibujo aparte.
  *  - Bucle propio: game_asteroids_run(mode) con su propio bucle,
  *    nada de callbacks de dibujo/tick registrados aparte.
  */
@@ -726,16 +732,61 @@ static void draw_playing_frame(void) {
 // Pantallas "estáticas" -- se redibujan enteras solo al entrar en el
 // estado, como en pong.c/space_invaders.c
 // ---------------------------------------------------------------------------
+
+// Gráfico decorativo del menú: una nave con su llama de thrust y un
+// par de asteroides, dibujados con las MISMAS funciones vectoriales
+// draw_ship()/draw_ast() que usa la partida real (mismo trazado por
+// líneas, no un dibujo aparte) -- structs locales mínimas que no
+// forman parte de la partida ni interactúan con ella.
+static void draw_menu_deco(int cy) {
+    Ship deco_ship = {0};
+    deco_ship.x         = PX2FP(CX);
+    deco_ship.y         = PX2FP(cy);
+    deco_ship.angle     = 0;      // apunta hacia arriba (ver draw_ship: vertice en 0,-9)
+    deco_ship.alive     = true;
+    deco_ship.thrusting = true;   // llama siempre encendida, puramente decorativo
+    draw_ship(&deco_ship, 0, COLOR_SHIP0);
+
+    Asteroid deco_ast1 = {0};
+    deco_ast1.x      = PX2FP(CX - 75);
+    deco_ast1.y      = PX2FP(cy + 6);
+    deco_ast1.size   = SZ_MED;
+    deco_ast1.shape  = 1;
+    deco_ast1.active = true;
+    draw_ast(&deco_ast1, COLOR_AST);
+
+    Asteroid deco_ast2 = {0};
+    deco_ast2.x      = PX2FP(CX + 75);
+    deco_ast2.y      = PX2FP(cy - 6);
+    deco_ast2.size   = SZ_SMALL;
+    deco_ast2.shape  = 3;
+    deco_ast2.active = true;
+    draw_ast(&deco_ast2, COLOR_AST);
+}
+
+// Línea del menú de selección, resaltada con flechas ">  <" y en
+// amarillo si es la opción actualmente elegida.
+static void draw_menu_item(const char *text, int y, bool selected) {
+    char buf[32];
+    if (selected) snprintf(buf, sizeof(buf), "> %s <", text);
+    else          snprintf(buf, sizeof(buf), "  %s  ", text);
+    uint16_t color = selected ? COLOR_YELLOW : COLOR_WHITE;
+    renderer_draw_text(centered_x(buf, 2), y, buf, color, COLOR_BLACK, 2);
+}
+
 static void draw_select_screen(void) {
     renderer_clear(COLOR_BLACK);
-    renderer_draw_text(centered_x("ASTEROIDS", 3), CY-60, "ASTEROIDS", COLOR_CYAN, COLOR_BLACK, 3);
-    renderer_draw_text(centered_x(num_players==1 ? "- 1 JUGADOR -" : "  1 JUGADOR  ", 2),
-                        CY-16, num_players==1 ? "- 1 JUGADOR -" : "  1 JUGADOR  ", COLOR_WHITE, COLOR_BLACK, 2);
-    renderer_draw_text(centered_x(num_players==2 ? "- 2 JUGADORES -" : "  2 JUGADORES  ", 2),
-                        CY+10, num_players==2 ? "- 2 JUGADORES -" : "  2 JUGADORES  ", COLOR_WHITE, COLOR_BLACK, 2);
-    renderer_draw_text(centered_x("GIRA PARA CAMBIAR - PULSA PARA JUGAR", 1), CY+45,
+
+    renderer_draw_text(centered_x("ASTEROIDS", 3), PLAY_Y + 6, "ASTEROIDS", COLOR_CYAN, COLOR_BLACK, 3);
+
+    draw_menu_deco(PLAY_Y + 60);
+
+    draw_menu_item("1 JUGADOR",   PLAY_Y + 104, num_players == 1);
+    draw_menu_item("2 JUGADORES", PLAY_Y + 130, num_players == 2);
+
+    renderer_draw_text(centered_x("GIRA PARA CAMBIAR - PULSA PARA JUGAR", 1), PLAY_Y + 160,
                         "GIRA PARA CAMBIAR - PULSA PARA JUGAR", COLOR_WHITE, COLOR_BLACK, 1);
-    renderer_draw_text(centered_x("DISPARO / THRUST / HYPER = BOTON A/B/GIRO", 1), CY+62,
+    renderer_draw_text(centered_x("DISPARO / THRUST / HYPER = BOTON A/B/GIRO", 1), PLAY_Y + 177,
                         "DISPARO / THRUST / HYPER = BOTON A/B/GIRO", COLOR_WHITE, COLOR_BLACK, 1);
     prev_bottom_msg[0] = '\0';
     prev_center_msg[0] = '\0';

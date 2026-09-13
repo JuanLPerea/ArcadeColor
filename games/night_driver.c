@@ -155,6 +155,16 @@
  *     desaparece sola. Se dispara al subir de stage (mismo momento que
  *     stage_bonus_flash) y va acompañado de un rótulo "META" grande en
  *     pantalla mientras dura el flash (~3s).
+ *
+ * ---------------------------------------------------------------------
+ * 8ª pasada: pantalla de título rediseñada
+ * ---------------------------------------------------------------------
+ *   - ND_TITLE ya no es solo texto: draw_title_road() dibuja una
+ *     carreterita en perspectiva (horizonte + bordes convergentes +
+ *     marcas de carril que se agrandan) bajo el título, con el mismo
+ *     espíritu visual que draw_road() pero totalmente estática -- no
+ *     toca posts[]/horizon_cx_fp, así que no hace falta haber llamado
+ *     a game_init()/init_posts() para pintarla.
  */
 
 #include <stdlib.h>
@@ -955,20 +965,55 @@ static void nd_tick(void) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Gráfico decorativo de la pantalla de título: una carretera en
+// perspectiva en miniatura, con el mismo espíritu visual que
+// draw_road() (bordes que convergen hacia un horizonte + marcas de
+// carril que se agrandan hacia el jugador) pero completamente
+// estática -- no toca posts[]/horizon_cx_fp ni ningún estado vivo de
+// la partida, así que es segura de llamar desde ND_TITLE sin haber
+// inicializado nada de eso todavía.
+// ---------------------------------------------------------------------------
+static void draw_title_road(int top_y, int bottom_y) {
+    const int hw_top = 6, hw_bot = 74;   // semiancho carretera arriba/abajo
+    int lx_top = CX - hw_top, rx_top = CX + hw_top;
+    int lx_bot = CX - hw_bot, rx_bot = CX + hw_bot;
+
+    // Horizonte
+    renderer_fill_rect(CX - hw_top - 30, top_y, (hw_top + 30) * 2, 1, COLOR_WHITE);
+
+    // Bordes de la carretera, convergiendo hacia el horizonte
+    line(lx_top, top_y, lx_bot, bottom_y, COLOR_WHITE);
+    line(rx_top, top_y, rx_bot, bottom_y, COLOR_WHITE);
+
+    // Marcas centrales del carril, agrandandose segun se acercan
+    // (mismo patron alterno amarillo/blanco que usa draw_road() con
+    // los postes reales)
+    const int n = 4;
+    for (int i = 0; i < n; i++) {
+        int t = (i + 1) * 100 / (n + 1);          // 20,40,60,80% hacia abajo
+        int y = top_y + (bottom_y - top_y) * t / 100;
+        int w = 2 + (hw_bot - 2) * t / 100;        // se ensancha hacia abajo
+        int h = 1 + 3 * t / 100;
+        renderer_fill_rect(CX - w / 2, y, w, h, (i & 1) ? COLOR_YELLOW : COLOR_WHITE);
+    }
+}
+
 static void nd_draw(void) {
     bool bon = (blink/15) % 2 == 0;
 
     switch (state) {
     case ND_TITLE:
         renderer_clear(COLOR_BLACK);
-        renderer_draw_text(centered_x("NIGHT DRIVER",3), CY-55, "NIGHT DRIVER", COLOR_CYAN, COLOR_BLACK, 3);
-        renderer_draw_text(centered_x("PULSA PARA JUGAR",2), CY-15, "PULSA PARA JUGAR", COLOR_WHITE, COLOR_BLACK, 2);
+        renderer_draw_text(centered_x("NIGHT DRIVER",3), PLAY_Y + 6, "NIGHT DRIVER", COLOR_CYAN, COLOR_BLACK, 3);
+        draw_title_road(PLAY_Y + 42, PLAY_Y + 108);
+        renderer_draw_text(centered_x("PULSA PARA JUGAR",2), PLAY_Y + 120, "PULSA PARA JUGAR", COLOR_WHITE, COLOR_BLACK, 2);
         if (bon)
-            renderer_draw_text(centered_x("LLEGA LO MAS LEJOS QUE PUEDAS",1), CY+12,
+            renderer_draw_text(centered_x("LLEGA LO MAS LEJOS QUE PUEDAS",1), PLAY_Y + 146,
                                 "LLEGA LO MAS LEJOS QUE PUEDAS", COLOR_YELLOW, COLOR_BLACK, 1);
-        renderer_draw_text(centered_x("A:ACELERA  B:FRENA  ENC1:VOLANTE",1), CY+28,
+        renderer_draw_text(centered_x("A:ACELERA  B:FRENA  ENC1:VOLANTE",1), PLAY_Y + 162,
                             "A:ACELERA  B:FRENA  ENC1:VOLANTE", COLOR_WHITE, COLOR_BLACK, 1);
-        renderer_draw_text(centered_x("ENC2: SALIR",1), CY+42, "ENC2: SALIR", COLOR_WHITE, COLOR_BLACK, 1);
+        renderer_draw_text(centered_x("ENC2: SALIR",1), PLAY_Y + 176, "ENC2: SALIR", COLOR_WHITE, COLOR_BLACK, 1);
         renderer_flush();
         break;
 

@@ -1124,6 +1124,7 @@ typedef struct { int x,y; bool active; } PrevPos;
 
 static PrevPos prev_heli[MAX_HELIS];
 static PrevPos prev_para[MAX_PARAS];
+static bool    prev_para_landed[MAX_PARAS]; // tamaño de caja usado en el último borrado de cada para
 static PrevPos prev_bomb[MAX_BOMBS];
 static PrevPos prev_plane_pos = { .active=false };
 static PrevPos prev_turret = { .active=false };
@@ -1146,6 +1147,20 @@ static char    prev_bottom_msg[40] = "";
 #define PARA_BOX_HW  12
 #define PARA_BOX_UP  28
 #define PARA_BOX_DN  18
+/*
+ * Caja reducida para el soldado YA ATERRIZADO (draw_soldier_at(px,py,...)
+ * dibujado directamente en py, sin el offset +SOLDIER_H del paracaidista
+ * en el aire): el sprite ocupa solo [py-15, py]. La caja grande de arriba
+ * (pensada para el paracaídas abierto, que sobresale ~14px por encima de
+ * py y deja el cuerpo ~15px por debajo) se queda muy holgada para este
+ * caso -- y como los soldados apilados en una ranura están separados
+ * exactamente SOLDIER_H=15px entre sí, un borrado de 28px hacia arriba
+ * se comía 13px del soldado de la ranura de encima en cada tick (se
+ * borraba y no se volvía a dibujar hasta el turno de ESE soldado en el
+ * bucle, de ahí el parpadeo al estar juntos).
+ */
+#define PARA_LAND_BOX_UP  16
+#define PARA_LAND_BOX_DN   2
 #define BOMB_BOX_R   6
 #define PLANE_BOX_HW 20
 #define PLANE_BOX_HH 10
@@ -1162,7 +1177,7 @@ static void erase_box(int x, int y, int w, int h) {
 
 static void reset_render_trace(void) {
     for (int i=0;i<MAX_HELIS;i++) prev_heli[i].active=false;
-    for (int i=0;i<MAX_PARAS;i++) prev_para[i].active=false;
+    for (int i=0;i<MAX_PARAS;i++) { prev_para[i].active=false; prev_para_landed[i]=false; }
     for (int i=0;i<MAX_BOMBS;i++) prev_bomb[i].active=false;
     prev_plane_pos.active=false;
     prev_turret.active=false;
@@ -1229,14 +1244,23 @@ static void draw_paras_if_moved(void) {
              * individual de más abajo parta de la posición real y no de
              * una desfasada de antes de empezar a marchar. */
             prev_para[i].x=cx; prev_para[i].y=cy; prev_para[i].active=show;
+            prev_para_landed[i] = true;
             continue;
         }
 
-        if (prev_para[i].active)
-            erase_box(prev_para[i].x-PARA_BOX_HW, prev_para[i].y-PARA_BOX_UP,
-                      2*PARA_BOX_HW, PARA_BOX_UP+PARA_BOX_DN);
+        if (prev_para[i].active) {
+            /* La caja de borrado depende de cómo se dibujó la ÚLTIMA vez
+             * (aterrizado o cayendo), no de cómo esté ahora: si acaba de
+             * aterrizar en este mismo tick hay que borrar todavía la
+             * silueta grande del paracaídas, no la pequeña del soldado. */
+            int up = prev_para_landed[i] ? PARA_LAND_BOX_UP : PARA_BOX_UP;
+            int dn = prev_para_landed[i] ? PARA_LAND_BOX_DN : PARA_BOX_DN;
+            erase_box(prev_para[i].x-PARA_BOX_HW, prev_para[i].y-up,
+                      2*PARA_BOX_HW, up+dn);
+        }
         if (show) draw_para(p, COLOR_SOLDIER);
         prev_para[i].x=cx; prev_para[i].y=cy; prev_para[i].active=show;
+        prev_para_landed[i] = p->landed;
         renderer_flush();
     }
 }
@@ -1251,6 +1275,18 @@ static void draw_paras_if_moved(void) {
  * de uno se comía los píxeles recién dibujados de otro en el mismo
  * frame. Al ser un único borrado+redibujado atómico, eso ya no puede
  * pasar.
+ *
+ * OJO -- esta franja llega en horizontal justo hasta TURRET_X (x0/x1),
+ * pero el sprite de la torreta (ver TURRET_BOX_HW) sobresale ~31px más
+ * allá de TURRET_X hacia ESTE mismo lado -- es decir, la mitad del
+ * dibujo de la torreta cae dentro de esta franja. El soldado que
+ * escala (target_x llega a base_edge = TURRET_X∓12, y hasta CANNON_OY
+ * en el peldaño más alto) queda literalmente pegado a la base. El
+ * erase_box de aquí arriba borra esa mitad de la torreta, así que hay
+ * que volver a dibujarla aquí mismo, en el mismo flush -- si se deja
+ * para draw_turret_if_changed() por separado, lo que se borre/dibuje
+ * ahí "gana" sobre lo que se acaba de pintar aquí (o al revés, según
+ * el orden de llamada) y uno de los dos parpadea cada tick.
  */
 static void draw_tower_region(void) {
     if (!tower_active) { prev_tower_region_active = false; return; }
@@ -1262,6 +1298,7 @@ static void draw_tower_region(void) {
     int bottom = GROUND_Y + 1;
 
     erase_box(x0, top, x1-x0, bottom-top);
+    if (cannon_alive) draw_turret();   // repone la mitad de la torreta que cae en esta franja
     for (int i=0;i<MAX_PARAS;i++) {
         const Para *p = &paras[i];
         if (!para_in_active_tower(p)) continue;
@@ -1381,6 +1418,15 @@ static void update_bottom_message(const char *target, int scale) {
 static void draw_playing_frame(void) {
     if (field_needs_redraw) draw_field_static();
 
+    /*
+     * draw_turret_if_changed() va ANTES que draw_tower_region(): la caja
+     * de borrado de la torreta invade la franja de marcha/escalada (ver
+     * comentario en draw_tower_region), así que quien se dibuje último
+     * sobre ese solape es el que se ve bien. Poniendo la torreta primero,
+     * draw_tower_region() (que ya redibuja la torreta por su cuenta en
+     * esa zona) tiene siempre la última palabra sobre los soldados.
+     */
+    draw_turret_if_changed();
     draw_paras_if_moved();
     draw_tower_region();
     draw_helis_if_moved();
@@ -1388,7 +1434,6 @@ static void draw_playing_frame(void) {
     draw_bombs_if_moved();
     draw_bullets_if_moved();
     draw_particles_if_moved();
-    draw_turret_if_changed();
     draw_hud_if_changed();
 
     bool bon = (blink/20)%2==0;

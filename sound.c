@@ -53,6 +53,28 @@
 #define CHANNEL2_VOLUME 80
 #define CHANNEL3_VOLUME 100
 
+/*
+ * Volumen específico de la música de menú y de la música in-game de
+ * Tetris (canales 1+2 en ambos casos, WAVE_TRIANGLE/WAVE_TRIANGLE en
+ * el menú vs WAVE_TRIANGLE/WAVE_SQUARE en Tetris).
+ *
+ * Con CHANNEL1/2_VOLUME "a secas" sonaban distinto de volumen aun
+ * usando el mismo numero: el bajo de Tetris usa WAVE_SQUARE (RMS
+ * pleno), mientras que el menú usa WAVE_TRIANGLE en los dos canales
+ * (RMS ~42% menor, ver nota de CHANNEL1/2_VOLUME más arriba) -- de ahí
+ * que el menú se oyera más flojo con el mismo volumen nominal.
+ *
+ * Estas constantes solo se usan en sound_start_menu_music()/
+ * sound_start_tetris_music() y en el avance de cada una dentro de
+ * sound_update(); CHANNEL1_VOLUME/CHANNEL2_VOLUME se mantienen para
+ * el resto de usos de esos canales (intro de Pac-Man, motor, derrape).
+ * Los efectos (canal 3, CHANNEL3_VOLUME) no se tocan.
+ */
+#define MENU_MUSIC_CH1_VOLUME   130   // antes CHANNEL1_VOLUME (110) -- más alto
+#define MENU_MUSIC_CH2_VOLUME   100   // antes CHANNEL2_VOLUME (80)  -- más alto
+#define TETRIS_MUSIC_CH1_VOLUME  90   // antes CHANNEL1_VOLUME (110) -- más bajo
+#define TETRIS_MUSIC_CH2_VOLUME  55   // antes CHANNEL2_VOLUME (80)  -- más bajo
+
 
 /* ============================================================
  * FORMAS DE ONDA
@@ -1422,7 +1444,7 @@ void sound_start_menu_music(void)
     configure_channel(
         &channel1,
         melody_notes[0],
-        CHANNEL1_VOLUME,
+        MENU_MUSIC_CH1_VOLUME,
         WAVE_TRIANGLE
     );
 
@@ -1430,7 +1452,7 @@ void sound_start_menu_music(void)
     configure_channel(
         &channel2,
         bass_notes[0],
-        CHANNEL2_VOLUME,
+        MENU_MUSIC_CH2_VOLUME,
         WAVE_TRIANGLE
     );
 
@@ -1548,7 +1570,7 @@ void sound_update(void)
             configure_channel(
                 &channel1,
                 tetris_music_ch1_freq[tetris_music_ch1_index],
-                CHANNEL1_VOLUME,
+                TETRIS_MUSIC_CH1_VOLUME,
                 WAVE_TRIANGLE
             );
             tetris_music_ch1_next =
@@ -1563,7 +1585,7 @@ void sound_update(void)
             configure_channel(
                 &channel2,
                 tetris_music_ch2_freq[tetris_music_ch2_index],
-                CHANNEL2_VOLUME,
+                TETRIS_MUSIC_CH2_VOLUME,
                 WAVE_SQUARE
             );
             tetris_music_ch2_next =
@@ -1648,7 +1670,7 @@ void sound_update(void)
     configure_channel(
         &channel1,
         melody,
-        CHANNEL1_VOLUME,
+        MENU_MUSIC_CH1_VOLUME,
         WAVE_TRIANGLE
     );
 
@@ -1656,7 +1678,7 @@ void sound_update(void)
     configure_channel(
         &channel2,
         bass,
-        CHANNEL2_VOLUME,
+        MENU_MUSIC_CH2_VOLUME,
         WAVE_TRIANGLE
     );
 
@@ -2180,8 +2202,8 @@ void sound_start_tetris_music(void)
     tetris_music_ch1_index = 0;
     tetris_music_ch2_index = 0;
 
-    configure_channel(&channel1, tetris_music_ch1_freq[0], CHANNEL1_VOLUME, WAVE_TRIANGLE);
-    configure_channel(&channel2, tetris_music_ch2_freq[0], CHANNEL2_VOLUME, WAVE_SQUARE);
+    configure_channel(&channel1, tetris_music_ch1_freq[0], TETRIS_MUSIC_CH1_VOLUME, WAVE_TRIANGLE);
+    configure_channel(&channel2, tetris_music_ch2_freq[0], TETRIS_MUSIC_CH2_VOLUME, WAVE_SQUARE);
 
     tetris_music_ch1_next = make_timeout_time_ms(tetris_music_ch1_dur[0]);
     tetris_music_ch2_next = make_timeout_time_ms(tetris_music_ch2_dur[0]);
