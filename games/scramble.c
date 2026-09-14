@@ -1326,6 +1326,10 @@ static void draw_zone_banner(void) {
 }
 
 static void draw_playing_frame(void) {
+    if (zone == ZONE_BIG_SHIP) {
+        renderer_clear(COLOR_BLACK);
+    }
+    
     draw_terrain();
     draw_objects();
     draw_big_ship();
@@ -1333,12 +1337,15 @@ static void draw_playing_frame(void) {
     draw_bullets();
     draw_bombs();
     draw_particles();
-    if (state == SCR_PLAYING || state == SCR_DEAD) draw_ship();
+
+    if (state == SCR_PLAYING || state == SCR_DEAD)
+        draw_ship();
+
     draw_hud();
     draw_zone_banner();
+
     renderer_flush();
 }
-
 // ---------------------------------------------------------------------------
 // Pantallas estáticas
 // ---------------------------------------------------------------------------
