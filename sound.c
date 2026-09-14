@@ -1523,7 +1523,7 @@ void sound_update(void)
                     &channel1,
                     pacman_intro_ch1_freq[pacman_intro_ch1_index],
                     CHANNEL1_VOLUME,
-                    WAVE_TRIANGLE
+                    WAVE_SQUARE
                 );
                 pacman_intro_ch1_next =
                     make_timeout_time_ms(pacman_intro_ch1_dur[pacman_intro_ch1_index]);
@@ -2148,7 +2148,7 @@ void sound_start_pacman_intro(void)
     pacman_intro_ch1_index = 0;
     pacman_intro_ch2_index = 0;
 
-    configure_channel(&channel1, pacman_intro_ch1_freq[0], CHANNEL1_VOLUME, WAVE_TRIANGLE);
+    configure_channel(&channel1, pacman_intro_ch1_freq[0], CHANNEL1_VOLUME, WAVE_SQUARE);
     configure_channel(&channel2, pacman_intro_ch2_freq[0], CHANNEL2_VOLUME, WAVE_SQUARE);
 
     pacman_intro_ch1_next = make_timeout_time_ms(pacman_intro_ch1_dur[0]);
