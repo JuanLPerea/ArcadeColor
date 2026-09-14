@@ -476,7 +476,9 @@ static void init_big_ship(int32_t scroll_px_now) {
             num_bricks++;
         }
     }
-    alien_x = scroll_px_now + PLAY_W + 40;
+    
+    int32_t zone_start_px = (int32_t)ZONE_BIG_SHIP * ZONE_LENGTH;
+    alien_x = zone_start_px + PLAY_W - 80;
     alien_base_y = PLAY_Y + 35;
     alien_t = rng_float() * 2.0f * (float)M_PI;
     alien_hp = ALIEN_MAX_HP;
@@ -980,18 +982,16 @@ static void update_scroll(void) {
 static void update_big_ship(void) {
     if (zone != ZONE_BIG_SHIP) return;
 
+        // Calculamos cuántos píxeles de la pantalla actual pertenecen a la zona del jefe
+    int32_t zone_start_px = (int32_t)(ZONE_BIG_SHIP * ZONE_LENGTH);
+    int32_t screen_left_px = scroll_px - 80;
+
     int base_sx = alien_screen_x();
-    if (!scroll_locked && base_sx <= PLAY_X+PLAY_W-160) {
+
+    if (!scroll_locked && screen_left_px >= zone_start_px) {
         scroll_locked = true;
         boss_engaged = true;
-        // Al congelar el scroll para el combate, cualquier cohete/fuel/base
-        // que aún estuviera en pantalla deja de recibir scroll (su sx sólo
-        // depende de world_x - scroll_px, y scroll_px ya no avanza), así
-        // que se quedaba "flotando" fijo para siempre -- la franja de
-        // basura por la izquierda que se veía en el nivel del jefe. Los
-        // OVNIs y meteoritos no tienen este problema (se mueven solos por
-        // world_x independientemente del scroll), así que basta con
-        // limpiar aquí el resto del pool.
+ 
         for (int i=0;i<MAX_OBJECTS;i++) {
             if (gobjs[i].active && gobjs[i].type != OBJ_UFO && gobjs[i].type != OBJ_METEOR)
                 gobjs[i].active = false;
@@ -1179,11 +1179,31 @@ static void draw_big_ship(void) {
     float top = alien_top();
     int ax = alien_screen_x();
 
-    for (int k=0;k<num_bricks;k++) {
-        if (!big_ship_bricks[k].active) continue;
-        int bx = ax + big_ship_bricks[k].rel_x;
-        int by = (int)top + big_ship_bricks[k].rel_y;
-        renderer_fill_rect(bx, by, BRICK_W, BRICK_H, big_ship_bricks[k].color);
+    // Los ladrillos se generan en orden fila/columna (ver init_big_ship),
+    // así que tramos contiguos de la misma fila y color se pueden fundir
+    // en un único renderer_fill_rect(). Con los ladrillos aguantando
+    // ahora 3-5 golpes el combate dura mucho más y sostener ~68 rects
+    // sueltos por tick satura el bus SPI -- de ahí los rastros ("rayas
+    // rojas" de las balas, "barra blanca" de la nave) que sólo se veían
+    // en este nivel: algún frame no llegaba a completarse a tiempo y se
+    // quedaba sin tapar del todo el frame anterior. A plena parrilla
+    // esto baja de 68 a ~14 llamadas.
+    int k = 0;
+    while (k < num_bricks) {
+        if (!big_ship_bricks[k].active) { k++; continue; }
+        int run_y   = big_ship_bricks[k].rel_y;
+        uint16_t run_col = big_ship_bricks[k].color;
+        int run_x0  = big_ship_bricks[k].rel_x;
+        int run_x1  = run_x0 + BRICK_W;
+        k++;
+        while (k < num_bricks && big_ship_bricks[k].active &&
+               big_ship_bricks[k].rel_y == run_y &&
+               big_ship_bricks[k].color == run_col &&
+               big_ship_bricks[k].rel_x == run_x1) {
+            run_x1 += BRICK_W;
+            k++;
+        }
+        renderer_fill_rect(ax+run_x0, (int)top+run_y, run_x1-run_x0, BRICK_H, run_col);
     }
 
     // El núcleo debe quedar centrado en el hueco de la parrilla (columnas
