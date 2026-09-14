@@ -104,6 +104,7 @@
 #define CY       (PLAY_Y + PLAY_H / 2)
 
 #define TICKS_S  60   // referencia nominal para pausas simples (no rítmicas)
+#define ZONE_BANNER_TICKS (TICKS_S * 2)   // duración del rótulo de zona sobreimpreso
 
 // ---------------------------------------------------------------------------
 // Utilidades generales
@@ -413,7 +414,14 @@ static void draw_particles(void) {
 #define ALIEN_CORE_W 48
 #define ALIEN_CORE_H 32
 
-typedef struct { bool active; int rel_x, rel_y; uint16_t color; } Brick;
+// Vida de los ladrillos: los "exteriores" (tocan directamente el vacío,
+// ya sea el borde de la parrilla o el hueco central del núcleo) caen en
+// 3 disparos; los "interiores" (protegidos por ladrillos alrededor en
+// las 4 direcciones) aguantan 5. Ver la clasificación en init_big_ship().
+#define BRICK_HP_EXTERIOR 3
+#define BRICK_HP_INTERIOR 5
+
+typedef struct { bool active; int rel_x, rel_y; uint16_t color; int hp; } Brick;
 static Brick   big_ship_bricks[MAX_BRICKS];
 static int     num_bricks;
 static int     alien_hp;
@@ -429,7 +437,11 @@ static float alien_top(void) { return (float)alien_base_y + alien_float_offset()
 static int   alien_screen_x(void);   // forward, definido tras 'scroll_px'
 
 static void init_big_ship(int32_t scroll_px_now) {
-    num_bricks = 0;
+    // Primera pasada: qué celdas de la parrilla SHIP_GRID_ROWS x
+    // SHIP_GRID_COLS están ocupadas (excluye el hueco central del
+    // núcleo), para poder luego mirar los 4 vecinos de cada ladrillo.
+    bool occ[SHIP_GRID_ROWS][SHIP_GRID_COLS];
+    memset(occ, 0, sizeof(occ));
     for (int r=0;r<SHIP_GRID_ROWS;r++) {
         int c0=0, c1=-1;
         if (r==0 || r==9) { c0=4; c1=7; }
@@ -438,15 +450,29 @@ static void init_big_ship(int32_t scroll_px_now) {
         else { c0=0; c1=11; }
         for (int c=c0;c<=c1;c++) {
             if (r>=3 && r<=6 && c>=4 && c<=7) continue;   // hueco central del núcleo
+            occ[r][c] = true;
+        }
+    }
+
+    num_bricks = 0;
+    for (int r=0;r<SHIP_GRID_ROWS;r++) {
+        for (int c=0;c<SHIP_GRID_COLS;c++) {
+            if (!occ[r][c]) continue;
             if (num_bricks >= MAX_BRICKS) break;
-            uint16_t col = COLOR_CYAN;
-            if (r<=2) col = COLOR_CYAN;
-            else if (r>=7) col = COLOR_YELLOW;
-            else col = COLOR_MAGENTA;
+
+            // Exterior si toca el vacío por cualquiera de sus 4 lados
+            // (borde de la parrilla o el hueco del núcleo); si no, está
+            // rodeado de ladrillos por todas partes y es "interior".
+            bool ext = (r==0 || r==SHIP_GRID_ROWS-1 || c==0 || c==SHIP_GRID_COLS-1)
+                    || !occ[r-1][c] || !occ[r+1][c] || !occ[r][c-1] || !occ[r][c+1];
+
+            uint16_t col = (r<=2) ? COLOR_CYAN : (r>=7) ? COLOR_YELLOW : COLOR_MAGENTA;
+
             big_ship_bricks[num_bricks].active = true;
-            big_ship_bricks[num_bricks].rel_x = c*BRICK_W;
-            big_ship_bricks[num_bricks].rel_y = r*BRICK_H;
-            big_ship_bricks[num_bricks].color = col;
+            big_ship_bricks[num_bricks].rel_x  = c*BRICK_W;
+            big_ship_bricks[num_bricks].rel_y  = r*BRICK_H;
+            big_ship_bricks[num_bricks].color  = col;
+            big_ship_bricks[num_bricks].hp     = ext ? BRICK_HP_EXTERIOR : BRICK_HP_INTERIOR;
             num_bricks++;
         }
     }
@@ -488,6 +514,7 @@ static bool scroll_locked, boss_engaged;
 static int  blink, demo_ticks, pause_cnt;
 static int  lives, level, score, fuel, fuel_cd;
 static int  zone;
+static int  zone_banner_ticks;   // ver draw_zone_banner()
 static int32_t scroll_px, next_spawn_world;
 static int  scroll_acc, scroll_spd;
 static int  shoot_cd, bomb_cd;
@@ -528,7 +555,7 @@ static void ship_respawn(void) {
 }
 
 static void game_start(void) {
-    lives = 3; level = 1; zone = ZONE_STEEP_MOUNTAINS; score = 0;
+    lives = 99; level = 1; zone = ZONE_STEEP_MOUNTAINS; score = 0;
     fuel = FUEL_MAX; fuel_cd = fuel_ticks_for_level();
     scroll_px = 0; scroll_acc = 0;
     scroll_spd = SCROLL_SPD0;
@@ -772,7 +799,10 @@ static void update_enemy_bullets(void) {
 
 static bool check_alien_hit(float x, float y, int w, int h) {
     float top = alien_top();
-    int   ax  = alien_screen_x();
+    // Mismo desplazamiento que en draw_big_ship(): el núcleo vive en el
+    // hueco de la parrilla (columnas 4-7), no en el borde izquierdo del
+    // OVNI. Sin este +4*BRICK_W la hitbox no coincidía con lo dibujado.
+    int   ax  = alien_screen_x() + 4*BRICK_W;
     float ay  = top + 3*BRICK_H;
 
     if (rects_overlapf(x,y,w,h, (float)ax,ay,ALIEN_CORE_W,ALIEN_CORE_H)) {
@@ -822,11 +852,15 @@ static void update_bullets(void) {
                 int bx = alien_screen_x() + big_ship_bricks[k].rel_x;
                 int by = (int)top + big_ship_bricks[k].rel_y;
                 if (rects_overlap(b->x,b->y,3,2, bx,by,BRICK_W,BRICK_H)) {
-                    big_ship_bricks[k].active = false;
                     b->active = false;
                     sound_effect_select();
                     add_explosion(bx+BRICK_W/2, by+BRICK_H/2, false);
-                    score += 20;
+                    if (--big_ship_bricks[k].hp <= 0) {
+                        big_ship_bricks[k].active = false;
+                        score += 20;
+                    } else {
+                        score += 5;
+                    }
                     break;
                 }
             }
@@ -879,11 +913,15 @@ static void update_bombs(void) {
                 int bx = alien_screen_x() + big_ship_bricks[k].rel_x;
                 int by = (int)top + big_ship_bricks[k].rel_y;
                 if (rects_overlapf(bm->x,bm->y,4,4, (float)bx,(float)by,BRICK_W,BRICK_H)) {
-                    big_ship_bricks[k].active = false;
                     bm->active = false;
                     sound_effect_select();
                     add_explosion(bx+BRICK_W/2, by+BRICK_H/2, false);
-                    score += 20;
+                    if (--big_ship_bricks[k].hp <= 0) {
+                        big_ship_bricks[k].active = false;
+                        score += 20;
+                    } else {
+                        score += 5;
+                    }
                     break;
                 }
             }
@@ -934,6 +972,7 @@ static void update_scroll(void) {
     int target_zone = zone_for_world(scroll_px);
     if (target_zone != zone && target_zone < NUM_ZONES) {
         zone = target_zone;
+        zone_banner_ticks = ZONE_BANNER_TICKS;
         if (zone == ZONE_BIG_SHIP) init_big_ship(scroll_px);
     }
 }
@@ -942,7 +981,22 @@ static void update_big_ship(void) {
     if (zone != ZONE_BIG_SHIP) return;
 
     int base_sx = alien_screen_x();
-    if (base_sx <= PLAY_X+PLAY_W-160) { scroll_locked = true; boss_engaged = true; }
+    if (!scroll_locked && base_sx <= PLAY_X+PLAY_W-160) {
+        scroll_locked = true;
+        boss_engaged = true;
+        // Al congelar el scroll para el combate, cualquier cohete/fuel/base
+        // que aún estuviera en pantalla deja de recibir scroll (su sx sólo
+        // depende de world_x - scroll_px, y scroll_px ya no avanza), así
+        // que se quedaba "flotando" fijo para siempre -- la franja de
+        // basura por la izquierda que se veía en el nivel del jefe. Los
+        // OVNIs y meteoritos no tienen este problema (se mueven solos por
+        // world_x independientemente del scroll), así que basta con
+        // limpiar aquí el resto del pool.
+        for (int i=0;i<MAX_OBJECTS;i++) {
+            if (gobjs[i].active && gobjs[i].type != OBJ_UFO && gobjs[i].type != OBJ_METEOR)
+                gobjs[i].active = false;
+        }
+    }
 
     alien_t += 0.025f;
     float top = alien_top();
@@ -1095,6 +1149,31 @@ static void draw_objects(void) {
     }
 }
 
+// Icono del núcleo -- una carita de "alien" sencilla y simétrica hecha
+// a base de renderer_fill_rect() (mismo estilo procedural que el resto
+// del juego: nave, terreno, etc.; sin bitmaps ni fuentes nuevas).
+// (cx,cy) es el CENTRO del icono en coordenadas de pantalla.
+static void draw_alien_icon(int cx, int cy) {
+    uint16_t body = COLOR_GREEN;
+    uint16_t eye  = COLOR_BLACK;
+
+    // Antenas (par simétrico)
+    renderer_fill_rect(cx-8, cy-18, 4, 3, body);
+    renderer_fill_rect(cx+4, cy-18, 4, 3, body);
+    renderer_fill_rect(cx-6, cy-16, 2, 4, body);
+    renderer_fill_rect(cx+4, cy-16, 2, 4, body);
+
+    // Cabeza (3 franjas horizontales que se van ensanchando/estrechando,
+    // aproximan un óvalo con muy pocas llamadas)
+    renderer_fill_rect(cx-7,  cy-12, 14, 3, body);
+    renderer_fill_rect(cx-11, cy-9,  22, 14, body);
+    renderer_fill_rect(cx-7,  cy+5,  14, 4, body);
+
+    // Ojos (par simétrico)
+    renderer_fill_rect(cx-8, cy-4, 6, 6, eye);
+    renderer_fill_rect(cx+2, cy-4, 6, 6, eye);
+}
+
 static void draw_big_ship(void) {
     if (zone != ZONE_BIG_SHIP) return;
     float top = alien_top();
@@ -1107,13 +1186,23 @@ static void draw_big_ship(void) {
         renderer_fill_rect(bx, by, BRICK_W, BRICK_H, big_ship_bricks[k].color);
     }
 
+    // El núcleo debe quedar centrado en el hueco de la parrilla (columnas
+    // 4-7 de SHIP_GRID_COLS=12, ver init_big_ship): antes se dibujaba en
+    // "ax" a secas (el borde izquierdo del OVNI), lo que lo desplazaba
+    // 4 columnas hacia la izquierda respecto al hueco real. El offset
+    // correcto es ax + 4*BRICK_W, que dado ALIEN_CORE_W=4*BRICK_W queda
+    // simétrico: sobran (12-4)/2 = 4 columnas de ladrillos a cada lado.
+    int core_x = ax + 4*BRICK_W;
     int ay = (int)top + 3*BRICK_H;
     uint16_t core_col = (blink%4<2) ? COLOR_RED : COLOR_MAGENTA;
-    renderer_fill_rect(ax, ay, ALIEN_CORE_W, ALIEN_CORE_H, core_col);
-    renderer_fill_rect(ax+12, ay+8, ALIEN_CORE_W-24, ALIEN_CORE_H-16, COLOR_YELLOW);
+    renderer_fill_rect(core_x, ay, ALIEN_CORE_W, ALIEN_CORE_H, core_col);
+    draw_alien_icon(core_x + ALIEN_CORE_W/2, ay + ALIEN_CORE_H/2);
+
+    // Golpes que le quedan al núcleo, como referencia rápida para el
+    // jugador -- ahora debajo del icono en vez de tapándolo.
     char buf[4];
     snprintf(buf, sizeof(buf), "%d", alien_hp);
-    renderer_draw_text(ax+ALIEN_CORE_W/2-3, ay+ALIEN_CORE_H/2-3, buf, COLOR_BLACK, COLOR_YELLOW, 1);
+    renderer_draw_text(core_x+ALIEN_CORE_W/2-3, ay+ALIEN_CORE_H+2, buf, COLOR_WHITE, COLOR_BLACK, 1);
 }
 
 static void draw_enemy_bullets(void) {
@@ -1164,34 +1253,56 @@ static void draw_ship(void) {
     renderer_fill_rect(x0-3, ymid-1, 3, 3, col);
 }
 
+// ---------------------------------------------------------------------------
+// HUD -- todo el texto a tamaño de letra 2 (fuente 2x). Ya no muestra el
+// nombre de la zona/nivel aquí (ver draw_zone_banner(): ahora aparece
+// sobreimpreso y centrado en pantalla sólo un momento en cada cambio de
+// zona/nivel, y luego se retira solo). La etiqueta de combustible se
+// reduce a una sola "F" para dejar más aire al resto del HUD.
+// ---------------------------------------------------------------------------
 static void draw_hud(void) {
     char buf[24];
+    const int fs = 2;   // tamaño de letra único para todo el HUD
     renderer_fill_rect(PLAY_X+1, PLAY_Y+1, PLAY_W-2, HUD_H, COLOR_BLACK);
 
     snprintf(buf, sizeof(buf), "%d", score);
-    renderer_draw_text(PLAY_X+3, PLAY_Y+3, buf, COLOR_WHITE, COLOR_BLACK, 1);
+    renderer_draw_text(PLAY_X+3, PLAY_Y+3, buf, COLOR_WHITE, COLOR_BLACK, fs);
 
     snprintf(buf, sizeof(buf), "V:%d", lives);
-    renderer_draw_text(PLAY_X+90, PLAY_Y+3, buf, COLOR_WHITE, COLOR_BLACK, 1);
+    renderer_draw_text(PLAY_X+90, PLAY_Y+3, buf, COLOR_WHITE, COLOR_BLACK, fs);
 
     int bar_w=50, bar_h=7;
     int bar_x = PLAY_X+PLAY_W-bar_w-4, bar_y = PLAY_Y+4;
-    renderer_draw_text(bar_x-28, PLAY_Y+3, "FUEL", COLOR_WHITE, COLOR_BLACK, 1);
+    renderer_draw_text(bar_x-16, PLAY_Y+3, "F", COLOR_WHITE, COLOR_BLACK, fs);
     renderer_fill_rect(bar_x, bar_y, bar_w, bar_h, COLOR_BLACK);
     int fill_w = bar_w*fuel/FUEL_MAX;
     uint16_t fcol = (fuel>50) ? COLOR_GREEN : (fuel>20 ? COLOR_YELLOW : COLOR_RED);
     if (fill_w > 0) renderer_fill_rect(bar_x, bar_y, fill_w, bar_h, fcol);
+    // Ya no hay barra de "PWR" del jefe aquí: su estado (ladrillos +
+    // golpes restantes en el núcleo) se ve directamente sobre el OVNI
+    // jefe en draw_big_ship().
+}
 
-    if (zone == ZONE_BIG_SHIP) {
-        int pbar_w=40, pbar_x=PLAY_X+130;
-        renderer_fill_rect(pbar_x, bar_y, pbar_w, bar_h, COLOR_BLACK);
-        int pfill_w = pbar_w*alien_hp/ALIEN_MAX_HP;
-        if (pfill_w > 0) renderer_fill_rect(pbar_x, bar_y, pfill_w, bar_h, COLOR_RED);
-        renderer_draw_text(pbar_x-24, PLAY_Y+3, "PWR", COLOR_WHITE, COLOR_BLACK, 1);
-    } else {
-        renderer_draw_text(centered_x(zone_short_names[zone],1), PLAY_Y+3,
-                            zone_short_names[zone], COLOR_WHITE, COLOR_BLACK, 1);
-    }
+// Aviso de zona/nivel: texto grande sobreimpreso centrado en pantalla,
+// visible sólo ZONE_BANNER_TICKS ticks tras un cambio de zona (incluida
+// la entrada a la zona 0 de un nivel nuevo), y que luego desaparece solo.
+// Se dibuja por encima del campo de juego pero antes del flush, así que
+// no necesita limpiar nada explícitamente: el siguiente frame de
+// draw_terrain()/draw_objects() lo tapa en cuanto zone_banner_ticks llega
+// a 0.
+static void draw_zone_banner(void) {
+    if (zone_banner_ticks <= 0) return;
+    const char *txt = zone_short_names[zone];
+    int fs = 2;
+    int tw = (int)st7789_text_width(txt, (uint8_t)fs);
+    int pad = 8;
+  //  int bx = CX - tw/2 - pad, by = CY - 14;
+    int bw = tw + 2*pad,      bh = 28;
+   // renderer_fill_rect(bx, by, bw, bh, COLOR_BLACK);
+   // renderer_fill_rect(bx, by, bw, 1, COLOR_WHITE);
+   // renderer_fill_rect(bx, by+bh-1, bw, 1, COLOR_WHITE);
+    renderer_draw_text(centered_x(txt, fs), CY-90, txt,
+                        COLOR_YELLOW, COLOR_BLACK, fs);
 }
 
 static void draw_playing_frame(void) {
@@ -1204,6 +1315,7 @@ static void draw_playing_frame(void) {
     draw_particles();
     if (state == SCR_PLAYING || state == SCR_DEAD) draw_ship();
     draw_hud();
+    draw_zone_banner();
     renderer_flush();
 }
 
@@ -1326,6 +1438,7 @@ static void draw_scores_screen(void) {
 // ---------------------------------------------------------------------------
 static void scr_tick(void) {
     blink++;
+    if (zone_banner_ticks > 0) zone_banner_ticks--;
 
     if (demo) {
         bool any = controls_menu_select()
@@ -1350,6 +1463,7 @@ static void scr_tick(void) {
     case SCR_READY:
         if (--pause_cnt <= 0) {
             state = SCR_PLAYING;
+            zone_banner_ticks = ZONE_BANNER_TICKS;   // repite el rótulo al empezar a jugar
             draw_field_static();
         }
         break;
