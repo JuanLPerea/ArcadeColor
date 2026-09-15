@@ -1,5 +1,6 @@
 #include "menu.h"
 #include "renderer.h"
+#include "about_image.h"
 #include "controls.h"
 #include "games/games_list.h"
 #include "highscores.h"
@@ -1253,9 +1254,12 @@ static void run_about_screen(void)
 {
     renderer_clear(COLOR_BLACK);
 
+    // Volcar directamente la imagen a la pantalla usando el renderer
+    renderer_blit_to_buffer(0, 0, ABOUT_IMG_WIDTH, ABOUT_IMG_HEIGHT, ABOUT_IMAGE_DATA);
+
     renderer_draw_text(
         centered_x(PROJECT_TITLE, TITLE_SCALE),
-        40,
+        20,
         PROJECT_TITLE,
         COLOR_CYAN,
         COLOR_BLACK,
@@ -1267,7 +1271,7 @@ static void run_about_screen(void)
 
     renderer_draw_text(
         centered_x(version_line, 2),
-        95,
+        200,
         version_line,
         COLOR_WHITE,
         COLOR_BLACK,
@@ -1279,14 +1283,14 @@ static void run_about_screen(void)
 
     renderer_draw_text(
         centered_x(author_line, 2),
-        125,
+        220,
         author_line,
         COLOR_YELLOW,
         COLOR_BLACK,
         2
     );
 
-    static const char *hint = "PULSA CUALQUIER BOTON PARA VOLVER";
+  /* static const char *hint = "PULSA CUALQUIER BOTON PARA VOLVER";
 
     renderer_draw_text(
         centered_x(hint, 1),
@@ -1296,7 +1300,7 @@ static void run_about_screen(void)
         COLOR_BLACK,
         1
     );
-
+*/
     renderer_flush();
 
     while (true) {
