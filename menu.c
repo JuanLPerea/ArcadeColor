@@ -7,6 +7,7 @@
 #include "pico/stdlib.h"
 #include <math.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 /*
  * Selector tipo "carrete": el juego seleccionado aparece grande y
@@ -44,6 +45,13 @@
 #define IDLE_TIMEOUT_MS (30 * 1000)
 #define SCORES_DISPLAY_MS (5 * 1000)
 #define ATTRACT_DEMO_MODE GAME_MODE_DEMO
+
+// Lista de reproducción de la música de menú: las pistas de
+// sound.c (0=Greensleeves, 1=Neon Circuit, 2=Star Patrol) suenan
+// una detrás de otra en bucle, cada una una vuelta completa, con
+// este hueco de silencio entre medias -- ver menu_music_playlist_*
+// más abajo.
+#define MENU_MUSIC_SILENCE_MS (2 * 1000)
 
 static const char *PROJECT_TITLE = "ARCADE COLOR";
 
@@ -1436,6 +1444,61 @@ static void run_attract_cycle(
 }
 
 
+/*
+ * Lista de reproducción de la música de menú.
+ *
+ * sound_start_menu_music() por sí sola deja una pista en bucle para
+ * siempre; esto añade una capa encima que va turnándose entre las
+ * SOUND_MENU_TRACK_COUNT pistas (Greensleeves, Neon Circuit, Star
+ * Patrol), dejando MENU_MUSIC_SILENCE_MS de silencio entre una y la
+ * siguiente. El índice de pista es estático (sobrevive a volver de
+ * un juego o del attract mode): la vuelta que toque sigue por donde
+ * se quedó en vez de reiniciar siempre en Greensleeves.
+ *
+ * playlist_ms cuenta manualmente en pasos de 15ms (el propio ciclo
+ * del bucle de menu_run(), ver sleep_ms(15) al final) en vez de usar
+ * absolute_time_t -- es la misma técnica que ya usa idle_ms más
+ * abajo para el timeout del attract mode.
+ */
+static uint8_t  playlist_track   = 0;
+static bool     playlist_silent  = false;
+static uint32_t playlist_ms      = 0;
+
+// Arranca sonando la pista "playlist_track" desde el principio.
+static void menu_music_playlist_resume(void)
+{
+    sound_set_menu_track(playlist_track);
+    sound_start_menu_music();
+    playlist_silent = false;
+    playlist_ms = 0;
+}
+
+// Avanza el reloj de la lista de reproducción -- llamar una vez por
+// vuelta del bucle principal de menu_run(), con los mismos 15ms de
+// sleep_ms() que ya usa idle_ms. Solo tiene sentido mientras estamos
+// en la pantalla del menú con música sonando (o en su hueco de
+// silencio): NO se llama durante un juego, el attract mode o las
+// opciones, que ya paran la música por su cuenta.
+static void menu_music_playlist_tick(void)
+{
+    playlist_ms += 15;
+
+    if (playlist_silent) {
+        if (playlist_ms >= MENU_MUSIC_SILENCE_MS) {
+            playlist_track = (playlist_track + 1) % SOUND_MENU_TRACK_COUNT;
+            menu_music_playlist_resume();
+        }
+        return;
+    }
+
+    if (playlist_ms >= sound_menu_track_duration_ms(playlist_track)) {
+        sound_stop_menu_music();
+        playlist_silent = true;
+        playlist_ms = 0;
+    }
+}
+
+
 void menu_run(void)
 {
     int selected = 0;
@@ -1444,9 +1507,17 @@ void menu_run(void)
     /*
      * Inicializamos e iniciamos la música
      * solamente cuando el menú está preparado.
+     *
+     * La pista con la que arranca la lista de reproducción es al
+     * azar (antes siempre empezaba en playlist_track=0, es decir,
+     * Greensleeves) -- menu_run() se llama una sola vez desde main y
+     * vive para siempre en su propio bucle, así que sembrar rand()
+     * aquí, una vez, es suficiente para toda la sesión del cacharro.
      */
     sound_init();
-    sound_start_menu_music();
+    srand(time_us_32());
+    playlist_track = rand() % SOUND_MENU_TRACK_COUNT;
+    menu_music_playlist_resume();
 
     renderer_clear(COLOR_BLACK);
 
@@ -1461,6 +1532,7 @@ void menu_run(void)
          * Actualización no bloqueante de la música.
          */
         sound_update();
+        menu_music_playlist_tick();
 
         controls_update();
 
@@ -1524,7 +1596,7 @@ void menu_run(void)
              * Al regresar al menú, reiniciamos
              * la música y redibujamos todo.
              */
-            sound_start_menu_music();
+            menu_music_playlist_resume();
 
             renderer_clear(COLOR_BLACK);
 
@@ -1552,7 +1624,7 @@ void menu_run(void)
                  * dejando el sonido apagado, así que
                  * volvemos a arrancar la música.
                  */
-                sound_start_menu_music();
+                menu_music_playlist_resume();
 
                 renderer_clear(COLOR_BLACK);
 

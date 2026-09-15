@@ -492,6 +492,177 @@ static const uint16_t bass_notes[MUSIC_NOTE_COUNT] = {
     NOTE_E3, 0
 };
 
+
+/* ============================================================
+ * MÚSICA DE MENÚ -- PISTAS ADICIONALES
+ *
+ * Además de Greensleeves (pista 0, los arrays melody_notes/
+ * bass_notes/melody_duration de arriba), el menú puede sonar con
+ * dos temas más de estilo arcade, compuestos para este proyecto.
+ * Los tres comparten formato: melodía, bajo y duración con el
+ * MISMO número de eventos, así que un único índice (music_index)
+ * vale para los tres canales de datos.
+ *
+ * La pista activa se elige con sound_set_menu_track() /
+ * sound_next_menu_track() -- ver la tabla menu_tracks[] más abajo.
+ * ============================================================ */
+
+/*
+ * Pista 1 -- "NEON CIRCUIT"
+ * La menor, 16 compases de corcheas a 150 BPM (200ms por evento,
+ * 12.8s de bucle). Arpegios ascendentes sobre Am-F-C-G con un giro
+ * a Mi mayor en el compás 15, al estilo de las melodías de ataque
+ * de los arcades de los 80.
+ */
+#define NEON_TRACK_LEN 64
+static const uint16_t neon_melody[NEON_TRACK_LEN] = {
+     440,  523,  659,  523,  440,  659,  880,  659,
+     349,  440,  523,  440,  523,  440,  349,    0,
+     523,  659,  784,  659,  784,  659,  523,  659,
+     494,  587,  784,  587,  784,  587,  494,    0,
+     880,  784,  659,  523,  880,  698,  523,  440,
+     784,  659,  523,  659,  494,  587,  784,  988,
+     880,  659,  440,  659,  698,  523,  440,  523,
+     494,  659,  831,  659,  440,    0,  440,    0,
+};
+static const uint16_t neon_bass[NEON_TRACK_LEN] = {
+     110,  110,   82,  110,  110,  110,   82,  110,
+      87,   87,   65,   87,   87,   87,   65,   87,
+     131,  131,   98,  131,  131,  131,   98,  131,
+      98,   98,   73,   98,   98,   98,   73,   98,
+     110,  110,   82,  110,   87,   87,   65,   87,
+     131,  131,   98,  131,   98,   98,   73,   98,
+     110,  110,   82,  110,   87,   87,   65,   87,
+      82,   82,   62,   82,  110,  110,   82,  110,
+};
+static const uint16_t neon_dur[NEON_TRACK_LEN] = {
+     200,  200,  200,  200,  200,  200,  200,  200,
+     200,  200,  200,  200,  200,  200,  200,  200,
+     200,  200,  200,  200,  200,  200,  200,  200,
+     200,  200,  200,  200,  200,  200,  200,  200,
+     200,  200,  200,  200,  200,  200,  200,  200,
+     200,  200,  200,  200,  200,  200,  200,  200,
+     200,  200,  200,  200,  200,  200,  200,  200,
+     200,  200,  200,  200,  200,  200,  200,  200,
+};
+
+/*
+ * Pista 2 -- "STAR PATROL"
+ * Do mayor, más rápida (150ms por evento, 9.6s de bucle) y con la
+ * melodía una octava más arriba que NEON CIRCUIT: suena a marcha
+ * espacial/fanfarria, para contrastar con el tono menor de la otra.
+ */
+#define STAR_TRACK_LEN 64
+static const uint16_t star_melody[STAR_TRACK_LEN] = {
+     523,  659,  784, 1047,  784,  659,  523,  659,
+     587,  784,  988,  784,  587,  494,  392,  494,
+     440,  523,  659,  880,  659,  523,  440,  523,
+     698,  880, 1047,  880,  784,  988, 1175,    0,
+    1047,  988,  880,  784,  659,  784,  988,  784,
+     698,  880,  698,  523,  784,  587,  494,  587,
+     523,  659,  784, 1047,  494,  587,  784,  587,
+    1047,  784,  659,  523,  523,    0,  523,    0,
+};
+static const uint16_t star_bass[STAR_TRACK_LEN] = {
+     131,  131,   98,  131,  131,  131,   98,  131,
+      98,   98,   73,   98,   98,   98,   73,   98,
+     110,  110,   82,  110,  110,  110,   82,  110,
+      87,   87,   65,   87,   98,   98,   73,   98,
+     131,  131,   98,  131,   82,   82,   62,   82,
+      87,   87,   65,   87,   98,   98,   73,   98,
+     131,  131,   98,  131,   98,   98,   73,   98,
+     131,  131,   98,  131,  131,  131,   98,  131,
+};
+static const uint16_t star_dur[STAR_TRACK_LEN] = {
+     150,  150,  150,  150,  150,  150,  150,  150,
+     150,  150,  150,  150,  150,  150,  150,  150,
+     150,  150,  150,  150,  150,  150,  150,  150,
+     150,  150,  150,  150,  150,  150,  150,  150,
+     150,  150,  150,  150,  150,  150,  150,  150,
+     150,  150,  150,  150,  150,  150,  150,  150,
+     150,  150,  150,  150,  150,  150,  150,  150,
+     150,  150,  150,  150,  150,  150,  150,  150,
+};
+
+/*
+ * Tabla de pistas del menú. La 0 es Greensleeves (arrays de arriba).
+ * Todas se recorren igual, con music_index y un solo temporizador.
+ */
+typedef struct {
+    const uint16_t *melody;
+    const uint16_t *bass;
+    const uint16_t *durations;
+    uint16_t        count;
+} MenuTrack;
+
+#define MENU_TRACK_COUNT 3
+
+static const MenuTrack menu_tracks[MENU_TRACK_COUNT] = {
+    { melody_notes, bass_notes,  melody_duration, MUSIC_NOTE_COUNT },
+    { neon_melody,  neon_bass,   neon_dur,        NEON_TRACK_LEN   },
+    { star_melody,  star_bass,   star_dur,        STAR_TRACK_LEN   },
+};
+
+static volatile uint8_t menu_track = 0;
+
+
+/* ============================================================
+ * TOCCATA Y FUGA EN RE MENOR, BWV 565 (J. S. BACH)
+ *
+ * Adaptación del compás de apertura -- el más reconocible de la
+ * obra -- para el juego Paratrooper. Dominio público (Bach, 1704).
+ *
+ * Estructura de la adaptación:
+ *   1. Mordente LA-SOL-LA agudo y caída SOL-FA-MI-RE-DO#-RE
+ *   2. La misma figura repetida una octava más abajo (el "eco"
+ *      entre manuales del órgano original)
+ *   3. Figura descendente rápida sobre pedal de RE
+ *   4. Arpegio ascendente de séptima disminuida
+ *   5. Acorde final de RE menor sostenido
+ *
+ * Canal 1 lleva la voz superior y canal 2 la inferior a distancia
+ * de octava (así suena a registro de órgano lleno). Igual que el
+ * jingle de inicio de Pac-Man, es de UNA SOLA PASADA (no en bucle,
+ * ~8.6s) -- suena una vez al empezar la partida y luego se apaga
+ * sola, dejando sonar solo los efectos del canal 3. Los dos canales
+ * comparten el MISMO array de duraciones, así que basta un índice
+ * para los dos y no pueden desfasarse.
+ * ============================================================ */
+#define TOCCATA_LEN 43
+static const uint16_t toccata_ch1_freq[TOCCATA_LEN] = {
+     880,  784,  880,    0,  784,  698,  659,  587,
+     554,  587,    0,  440,  392,  440,    0,  392,
+     349,  330,  294,  277,  294,    0,  587,  554,
+     587,  659,  587,  554,  587,    0,  294,  349,
+     440,  523,  587,  698,  880,    0,  587,    0,
+     698,  587,    0,
+};
+static const uint16_t toccata_ch2_freq[TOCCATA_LEN] = {
+     440,  392,  440,    0,  392,  349,  330,  294,
+     277,  294,    0,  220,  196,  220,    0,  196,
+     175,  165,  147,  139,  147,    0,  147,  147,
+     147,  165,  147,  139,  147,    0,  147,  175,
+     220,  262,  294,  349,  440,    0,  147,    0,
+     175,  147,    0,
+};
+static const uint16_t toccata_dur[TOCCATA_LEN] = {
+      90,   90,  520,   70,   85,   85,   85,   85,
+     300,  430,  130,   90,   90,  520,   70,   85,
+      85,   85,   85,  300,  520,  170,   75,   75,
+      75,   75,   75,   75,  320,  110,  115,  115,
+     115,  115,  115,  115,  420,  130,  720,   90,
+     300,  940,  320,
+};
+
+/* Volúmenes: el canal 2 casi igual que el 1 -- en el órgano las dos
+ * voces suenan a la par, no es un bajo de acompañamiento. */
+#define TOCCATA_CH1_VOLUME 115
+#define TOCCATA_CH2_VOLUME 100
+
+static volatile bool toccata_playing = false;
+static uint16_t toccata_index;
+static absolute_time_t toccata_next;
+
 /* ============================================================
  * ESTADO DE LA MÚSICA
  * ============================================================ */
@@ -583,6 +754,42 @@ static void configure_channel(volatile audio_channel_t *channel, uint16_t freque
 static void disable_channel(volatile audio_channel_t *channel);
 static void channel_set_frequency(volatile audio_channel_t *channel, uint16_t frequency);
 
+/* ============================================================
+ * BARRIDO DE FRECUENCIA (CANAL 3)
+ *
+ * El secuenciador de más abajo (channel3_seq) salta de nota en
+ * nota; esto en cambio desliza la frecuencia de forma continua
+ * entre dos valores. Es lo que hace falta para los "pew" de láser,
+ * los power-up ascendentes y los teletransportes -- con
+ * channel3_seq_start() sonarían a escalera de 4 peldaños en vez de
+ * a barrido.
+ *
+ * Usa channel_set_frequency() en vez de configure_channel() para NO
+ * resetear la fase en cada paso: con reset se oiría un chasquido por
+ * paso en vez de un deslizamiento limpio (mismo motivo que el
+ * chirrido de derrape del canal 1).
+ *
+ * Comparte canal 3 con channel3_seq y con el tono suelto de
+ * sound_play_tone(): los tres se excluyen mutuamente, manda el
+ * último en arrancar. Declarado ANTES que channel3_seq_start() (más
+ * abajo) porque esa función necesita poder apartar el barrido al
+ * arrancar una secuencia -- las funciones channel3_sweep_start()/
+ * _update() están más abajo, junto al resto de la lógica de barrido.
+ * ============================================================ */
+#define CHANNEL3_SWEEP_MAX_STEPS 40
+
+typedef struct {
+    bool     active;
+    uint16_t freq_start;
+    uint16_t freq_end;
+    uint8_t  steps;
+    uint8_t  index;
+    uint16_t step_ms;
+    absolute_time_t next_change;
+} Channel3Sweep;
+
+static volatile Channel3Sweep channel3_sweep = { .active = false };
+
 /*
  * Secuenciador simple de canal 3, para melodías cortas no
  * bloqueantes (2-4 notas): "pierdes la bola" descendente, "victoria"
@@ -632,10 +839,11 @@ static void channel3_seq_start(
     channel3_seq.waveform = waveform;
     channel3_seq.active   = true;
 
-    // La secuencia y el temporizador de "un solo tono" comparten el
-    // canal 3 -- se excluyen mutuamente, solo uno de los dos manda
-    // en cada momento.
+    // La secuencia, el temporizador de "un solo tono" y el barrido
+    // comparten el canal 3 -- se excluyen mutuamente, solo uno de los
+    // tres manda en cada momento.
     channel3_tone_has_expiry = false;
+    channel3_sweep.active    = false;
 
     configure_channel(&channel3, channel3_seq.freqs[0], volume, waveform);
     channel3_seq.next_change = make_timeout_time_ms(channel3_seq.durations_ms[0]);
@@ -666,6 +874,74 @@ static void channel3_seq_update(void)
     );
     channel3_seq.next_change =
         make_timeout_time_ms(channel3_seq.durations_ms[channel3_seq.index]);
+}
+
+/* ============================================================
+ * BARRIDO DE FRECUENCIA (CANAL 3) -- continuación
+ *
+ * El tipo Channel3Sweep y la variable channel3_sweep ya están
+ * declarados más arriba (antes de channel3_seq_start(), que
+ * necesita poder apartar el barrido al arrancar una secuencia).
+ * Aquí van las dos funciones que lo manejan.
+ * ============================================================ */
+
+static void channel3_sweep_start(
+    uint16_t freq_start,
+    uint16_t freq_end,
+    uint8_t  steps,
+    uint16_t step_ms,
+    uint16_t volume,
+    uint8_t  waveform
+)
+{
+    if (steps < 2) {
+        steps = 2;
+    }
+    if (steps > CHANNEL3_SWEEP_MAX_STEPS) {
+        steps = CHANNEL3_SWEEP_MAX_STEPS;
+    }
+
+    channel3_sweep.freq_start = freq_start;
+    channel3_sweep.freq_end   = freq_end;
+    channel3_sweep.steps      = steps;
+    channel3_sweep.index      = 0;
+    channel3_sweep.step_ms    = step_ms;
+    channel3_sweep.active     = true;
+
+    // Los otros dos dueños posibles del canal 3 se apartan.
+    channel3_seq.active      = false;
+    channel3_tone_has_expiry = false;
+
+    configure_channel(&channel3, freq_start, volume, waveform);
+    channel3_sweep.next_change = make_timeout_time_ms(step_ms);
+}
+
+static void channel3_sweep_update(void)
+{
+    if (!channel3_sweep.active) {
+        return;
+    }
+    if (!time_reached(channel3_sweep.next_change)) {
+        return;
+    }
+
+    channel3_sweep.index++;
+
+    if (channel3_sweep.index >= channel3_sweep.steps) {
+        channel3_sweep.active = false;
+        disable_channel(&channel3);
+        return;
+    }
+
+    // Interpolación lineal entre freq_start y freq_end. En int32 para
+    // que el producto intermedio no desborde con frecuencias altas.
+    int32_t f0 = (int32_t)channel3_sweep.freq_start;
+    int32_t f1 = (int32_t)channel3_sweep.freq_end;
+    int32_t f  = f0 + ((f1 - f0) * (int32_t)channel3_sweep.index)
+                      / (int32_t)(channel3_sweep.steps - 1);
+
+    channel_set_frequency(&channel3, (uint16_t)f);
+    channel3_sweep.next_change = make_timeout_time_ms(channel3_sweep.step_ms);
 }
 
 /* Efecto corto de una sola nota, con apagado automático -- usada por
@@ -1186,6 +1462,71 @@ static absolute_time_t pacman_intro_ch2_next;
 
 
 /* ============================================================
+ * FANFARRIA DE VICTORIA DE SCRAMBLE (JEFE DESTRUIDO)
+ *
+ * Melodía original compuesta para este proyecto (no es un port de
+ * ningún arcade), pensada para sonar mientras el OVNI jefe estalla
+ * al final de cada nivel: arpegio ascendente de Do mayor, subida
+ * cromática y resolución en el Do agudo.
+ *
+ * Misma estructura que el jingle de Pac-Man de arriba: una sola
+ * pasada (no bucle), canal 1 = melodía y canal 2 = bajo, con dos
+ * índices/temporizadores independientes porque los canales no van
+ * sincronizados nota a nota (18 eventos en melodía, 13 en bajo)
+ * aunque ambos suman exactamente 3200ms.
+ *
+ * Canal 3 (efectos) queda libre a propósito: así las explosiones
+ * de las partículas pueden seguir sonando por encima de la música.
+ * ============================================================ */
+#define SCRAMBLE_WIN_CH1_LEN 18
+#define SCRAMBLE_WIN_CH2_LEN 13
+
+/* Volúmenes propios: por encima de los de Tetris (es un remate
+ * puntual, no música de fondo) pero sin llegar a los del menú. */
+#define SCRAMBLE_WIN_CH1_VOLUME 120
+#define SCRAMBLE_WIN_CH2_VOLUME  90
+
+static const uint16_t scramble_win_ch1_freq[SCRAMBLE_WIN_CH1_LEN] = {
+    /* Arpegio Do mayor ascendente: SOL4-DO5-MI5-SOL5 */
+     392,    0,  523,    0,  659,    0,  784,    0,
+    /* MI5-SOL5 sostenido */
+     659,  784,    0,
+    /* Subida LA5-SI5 y resolución en DO6 */
+     880,  988, 1047,    0,
+    /* Remate: SOL5 corto + DO6 largo */
+     784, 1047,    0,
+};
+static const uint16_t scramble_win_ch1_dur[SCRAMBLE_WIN_CH1_LEN] = {
+     100,   20,  100,   20,  100,   20,  300,   40,
+     120,  480,   60,
+     140,  140,  600,   80,
+     120,  700,   60,
+};
+
+static const uint16_t scramble_win_ch2_freq[SCRAMBLE_WIN_CH2_LEN] = {
+    /* Pedal de DO3 bajo el arpegio, luego SOL3 */
+     131,    0,  131,    0,  196,    0,
+    /* MI3-FA3-SOL3 acompañando la subida */
+     165,  175,  196,    0,
+    /* Cadencia final SOL3 -> DO4 */
+     196,  262,    0,
+};
+static const uint16_t scramble_win_ch2_dur[SCRAMBLE_WIN_CH2_LEN] = {
+     330,   30,  260,   40,  480,   60,
+     300,  140,  600,   80,
+     120,  700,   60,
+};
+
+static volatile bool scramble_win_active   = false;
+static volatile bool scramble_win_ch1_done = false;
+static volatile bool scramble_win_ch2_done = false;
+static uint8_t scramble_win_ch1_index;
+static uint8_t scramble_win_ch2_index;
+static absolute_time_t scramble_win_ch1_next;
+static absolute_time_t scramble_win_ch2_next;
+
+
+/* ============================================================
  * MÚSICA DE TETRIS (IN-GAME)
  * Korobeiniki ("tema A" de Tetris) — melodía popular rusa de
  * dominio público, en el arreglo chiptune de 2 voces habitual en
@@ -1437,13 +1778,17 @@ void sound_start_menu_music(void)
 
     // La sirena del platillo y el motor también usan el canal 2 -- si
     // por lo que sea estuvieran sonando, la música de menú manda.
+    // Lo mismo con la fanfarria de victoria de Scramble (canales 1+2):
+    // al volver al menú tras un nivel, la música de menú se impone.
     channel2_siren_active  = false;
     channel2_engine_active = false;
+    scramble_win_active    = false;
+    toccata_playing        = false;
 
 
     configure_channel(
         &channel1,
-        melody_notes[0],
+        menu_tracks[menu_track].melody[0],
         MENU_MUSIC_CH1_VOLUME,
         WAVE_TRIANGLE
     );
@@ -1451,7 +1796,7 @@ void sound_start_menu_music(void)
 
     configure_channel(
         &channel2,
-        bass_notes[0],
+        menu_tracks[menu_track].bass[0],
         MENU_MUSIC_CH2_VOLUME,
         WAVE_TRIANGLE
     );
@@ -1459,7 +1804,7 @@ void sound_start_menu_music(void)
 
     music_next_change =
         make_timeout_time_ms(
-            melody_duration[0]
+            menu_tracks[menu_track].durations[0]
         );
 
 
@@ -1507,6 +1852,9 @@ void sound_update(void)
     // apagado automático, o las secuencias de 2-4 notas).
     channel3_seq_update();
 
+    // Avanza el barrido continuo de frecuencia (láser, power-ups...).
+    channel3_sweep_update();
+
     // Avanza el jingle de inicio de Pac-Man (canal 1 + canal 2, dos
     // índices independientes -- ver comentario junto a los arrays
     // pacman_intro_ch1/ch2 más arriba).
@@ -1549,6 +1897,102 @@ void sound_update(void)
 
         if (pacman_intro_ch1_done && pacman_intro_ch2_done) {
             pacman_intro_active = false;
+        }
+
+        restore_interrupts(save);
+    }
+
+    // Avanza la fanfarria de victoria de Scramble (canal 1 + canal 2).
+    // Igual que el jingle de Pac-Man: una sola pasada, dos índices
+    // independientes, y al terminar los dos canales se desactiva sola.
+    if (scramble_win_active) {
+        uint32_t save = save_and_disable_interrupts();
+
+        if (!scramble_win_ch1_done && time_reached(scramble_win_ch1_next)) {
+            scramble_win_ch1_index++;
+            if (scramble_win_ch1_index >= SCRAMBLE_WIN_CH1_LEN) {
+                scramble_win_ch1_done = true;
+                disable_channel(&channel1);
+            } else {
+                configure_channel(
+                    &channel1,
+                    scramble_win_ch1_freq[scramble_win_ch1_index],
+                    SCRAMBLE_WIN_CH1_VOLUME,
+                    WAVE_TRIANGLE
+                );
+                scramble_win_ch1_next =
+                    make_timeout_time_ms(scramble_win_ch1_dur[scramble_win_ch1_index]);
+            }
+        }
+
+        if (!scramble_win_ch2_done && time_reached(scramble_win_ch2_next)) {
+            scramble_win_ch2_index++;
+            if (scramble_win_ch2_index >= SCRAMBLE_WIN_CH2_LEN) {
+                scramble_win_ch2_done = true;
+                disable_channel(&channel2);
+            } else {
+                configure_channel(
+                    &channel2,
+                    scramble_win_ch2_freq[scramble_win_ch2_index],
+                    SCRAMBLE_WIN_CH2_VOLUME,
+                    WAVE_SQUARE
+                );
+                scramble_win_ch2_next =
+                    make_timeout_time_ms(scramble_win_ch2_dur[scramble_win_ch2_index]);
+            }
+        }
+
+        if (scramble_win_ch1_done && scramble_win_ch2_done) {
+            scramble_win_active = false;
+        }
+
+        restore_interrupts(save);
+    }
+
+    // Avanza la Toccata BWV 565 de Paratrooper (canal 1 + canal 2).
+    // Una sola pasada (~8.6s) al empezar la partida, NO en bucle --
+    // igual que el jingle de inicio de Pac-Man: al llegar al final se
+    // desactiva sola y a partir de ahí solo se oyen los efectos.
+    //
+    // OJO canal 2: en Paratrooper el aviso del avión usa
+    // sound_siren_start()/stop() sobre el CANAL 2, que es el mismo
+    // que la voz de bajo de la Toccata -- por si el avión llegara a
+    // aparecer durante los ~8.6s que dura. En vez de parar la música
+    // entera (cortaría también la melodía del canal 1), aquí se cede
+    // el canal 2 a quien lo esté usando (sirena o motor) y solo se
+    // reconfigura el canal 1: la melodía sigue sonando sin cortes y
+    // el bajo retoma solo, en el índice que toque, en cuanto el avión
+    // se calla (ver sound_siren_stop()).
+    if (toccata_playing) {
+        uint32_t save = save_and_disable_interrupts();
+
+        if (time_reached(toccata_next)) {
+            toccata_index++;
+
+            if (toccata_index >= TOCCATA_LEN) {
+                toccata_playing = false;
+                disable_channel(&channel1);
+                if (!channel2_siren_active && !channel2_engine_active) {
+                    disable_channel(&channel2);
+                }
+            } else {
+                configure_channel(
+                    &channel1,
+                    toccata_ch1_freq[toccata_index],
+                    TOCCATA_CH1_VOLUME,
+                    WAVE_TRIANGLE
+                );
+                if (!channel2_siren_active && !channel2_engine_active) {
+                    configure_channel(
+                        &channel2,
+                        toccata_ch2_freq[toccata_index],
+                        TOCCATA_CH2_VOLUME,
+                        WAVE_SQUARE
+                    );
+                }
+
+                toccata_next = make_timeout_time_ms(toccata_dur[toccata_index]);
+            }
         }
 
         restore_interrupts(save);
@@ -1654,17 +2098,17 @@ void sound_update(void)
 
     if (
         music_index >=
-        MUSIC_NOTE_COUNT
+        menu_tracks[menu_track].count
     ) {
         music_index = 0;
     }
 
 
     uint16_t melody =
-        melody_notes[music_index];
+        menu_tracks[menu_track].melody[music_index];
 
     uint16_t bass =
-        bass_notes[music_index];
+        menu_tracks[menu_track].bass[music_index];
 
 
     configure_channel(
@@ -1685,7 +2129,7 @@ void sound_update(void)
 
     music_next_change =
         make_timeout_time_ms(
-            melody_duration[music_index]
+            menu_tracks[menu_track].durations[music_index]
         );
 
 
@@ -1847,10 +2291,204 @@ void sound_effect_victory(void)
  *
  * La música continúa.
  */
+/* ============================================================
+ * EFECTOS AÑADIDOS
+ *
+ * Los que usan channel3_sweep_start() deslizan la frecuencia de
+ * forma continua (ver el motor de barrido más arriba); el resto son
+ * secuencias cortas de hasta 4 notas, como los efectos originales.
+ * Todos NO BLOQUEANTES y todos sobre el canal 3, así que no pisan
+ * la música de fondo de los canales 1+2.
+ * ============================================================ */
+
+/*
+ * Láser: el "pew" clásico -- caída rápida de agudo a grave en diente
+ * de sierra, la forma más áspera que tiene el motor. Corto (~110ms)
+ * porque se dispara muchas veces seguidas.
+ */
+void sound_effect_laser(void)
+{
+    if (!sound_initialized) {
+        sound_init();
+    }
+
+    channel3_sweep_start(1900, 320, 16, 7, CHANNEL3_VOLUME, WAVE_SAW);
+}
+
+
+/*
+ * Láser grande / cañón cargado: mismo gesto que el láser normal pero
+ * más grave, más largo y en cuadrada, para el disparo potenciado o
+ * el arma del jefe.
+ */
+void sound_effect_laser_big(void)
+{
+    if (!sound_initialized) {
+        sound_init();
+    }
+
+    channel3_sweep_start(900, 90, 24, 11, CHANNEL3_VOLUME, WAVE_SQUARE);
+}
+
+
+/*
+ * Power-up recogido: barrido ascendente amplio en triangular, suena
+ * a "mejora conseguida".
+ */
+void sound_effect_powerup(void)
+{
+    if (!sound_initialized) {
+        sound_init();
+    }
+
+    channel3_sweep_start(280, 1700, 22, 13, CHANNEL3_VOLUME, WAVE_TRIANGLE);
+}
+
+
+/*
+ * Power-down / escudo perdido: el gesto contrario al anterior,
+ * descendente y algo más lento.
+ */
+void sound_effect_powerdown(void)
+{
+    if (!sound_initialized) {
+        sound_init();
+    }
+
+    channel3_sweep_start(1400, 180, 26, 15, CHANNEL3_VOLUME, WAVE_TRIANGLE);
+}
+
+
+/*
+ * Moneda / bonus recogido: dos notas rápidas con salto de quinta,
+ * el gesto universal de "has cogido algo bueno".
+ */
+void sound_effect_coin(void)
+{
+    if (!sound_initialized) {
+        sound_init();
+    }
+
+    static const uint16_t freqs[2]     = { 988, 1319 };  // si5 -> mi6
+    static const uint16_t durations[2] = {  70,  200 };
+
+    channel3_seq_start(freqs, durations, 2, CHANNEL3_VOLUME, WAVE_SQUARE);
+}
+
+
+/*
+ * Salto: barrido ascendente corto y seco, en cuadrada.
+ */
+void sound_effect_jump(void)
+{
+    if (!sound_initialized) {
+        sound_init();
+    }
+
+    channel3_sweep_start(380, 950, 10, 8, CHANNEL3_VOLUME, WAVE_SQUARE);
+}
+
+
+/*
+ * Impacto recibido: golpe de ruido grave, más corto y seco que
+ * sound_effect_explosion() -- "me han dado" en vez de "algo ha
+ * estallado".
+ */
+void sound_effect_hit(void)
+{
+    if (!sound_initialized) {
+        sound_init();
+    }
+
+    channel3_play_short(70, CHANNEL3_VOLUME, WAVE_NOISE, 90);
+}
+
+
+/*
+ * Alarma / aviso: dos parejas de notas alternando agudo-grave, al
+ * estilo de los avisos de combustible bajo o enemigo entrante.
+ */
+void sound_effect_alarm(void)
+{
+    if (!sound_initialized) {
+        sound_init();
+    }
+
+    static const uint16_t freqs[4]     = { 1047, 740, 1047, 740 };
+    static const uint16_t durations[4] = {  110, 110,  110, 160 };
+
+    channel3_seq_start(freqs, durations, 4, CHANNEL3_VOLUME, WAVE_SQUARE);
+}
+
+
+/*
+ * Teletransporte / aparición: barrido ascendente muy amplio y largo
+ * en diente de sierra -- el "whoop" de materialización.
+ */
+void sound_effect_teleport(void)
+{
+    if (!sound_initialized) {
+        sound_init();
+    }
+
+    channel3_sweep_start(150, 2100, 32, 12, CHANNEL3_VOLUME, WAVE_SAW);
+}
+
+
+/*
+ * Rebote: dos notas muy cortas subiendo, para pelotas, muelles o
+ * proyectiles que rebotan en una pared.
+ */
+void sound_effect_bounce(void)
+{
+    if (!sound_initialized) {
+        sound_init();
+    }
+
+    static const uint16_t freqs[2]     = { 520, 780 };
+    static const uint16_t durations[2] = {  45,  55 };
+
+    channel3_seq_start(freqs, durations, 2, CHANNEL3_VOLUME, WAVE_SQUARE);
+}
+
+
+/*
+ * Propulsor: soplido corto de ruido grave, para el empuje de una
+ * nave o el paracaídas abriéndose. Pensado para repetirse seguido
+ * mientras se mantiene el empuje.
+ */
+void sound_effect_thrust(void)
+{
+    if (!sound_initialized) {
+        sound_init();
+    }
+
+    channel3_play_short(45, CHANNEL3_VOLUME / 2, WAVE_NOISE, 70);
+}
+
+
+/*
+ * Vida extra: arpegio ascendente de 4 notas (do-mi-sol-do), la
+ * fanfarria corta de "1UP". Más larga y resolutiva que
+ * sound_effect_victory() (3 notas).
+ */
+void sound_effect_extra_life(void)
+{
+    if (!sound_initialized) {
+        sound_init();
+    }
+
+    static const uint16_t freqs[4]     = { 523, 659, 784, 1047 };
+    static const uint16_t durations[4] = {  90,  90,  90,  300 };
+
+    channel3_seq_start(freqs, durations, 4, CHANNEL3_VOLUME, WAVE_TRIANGLE);
+}
+
 void sound_effect_stop(void)
 {
     channel3_seq.active = false;
     channel3_tone_has_expiry = false;
+    channel3_sweep.active = false;
 
     disable_channel(
         &channel3
@@ -1887,6 +2525,21 @@ void sound_siren_start(void)
 void sound_siren_stop(void)
 {
     channel2_siren_active = false;
+
+    // Si la Toccata de Paratrooper está sonando, el canal 2 es su voz
+    // de bajo (ver el "cede el canal" en sound_update()) -- en vez de
+    // apagarlo sin más, se retoma la nota que tocaría ahora mismo. En
+    // cualquier otro juego toccata_playing es siempre false, así que
+    // esto no cambia nada del comportamiento de antes.
+    if (toccata_playing) {
+        configure_channel(
+            &channel2,
+            toccata_ch2_freq[toccata_index],
+            TOCCATA_CH2_VOLUME,
+            WAVE_SQUARE
+        );
+        return;
+    }
 
     disable_channel(
         &channel2
@@ -2141,6 +2794,8 @@ void sound_start_pacman_intro(void)
     // sirena del platillo -- si sonaba algo de eso, el jingle manda.
     menu_music_playing    = false;
     channel2_siren_active = false;
+    scramble_win_active   = false;
+    toccata_playing       = false;
 
     pacman_intro_active   = true;
     pacman_intro_ch1_done = false;
@@ -2177,6 +2832,220 @@ void sound_stop_pacman_intro(void)
 
 
 /*
+ * Arranca la fanfarria de victoria de Scramble (canal 1 + canal 2),
+ * una sola pasada de ~3200ms. Ver notas junto a los arrays
+ * scramble_win_ch1/ch2 más arriba.
+ *
+ * Deja libre el canal 3 a propósito: los efectos de explosión que
+ * el juego dispare mientras suena se siguen oyendo por encima.
+ */
+void sound_start_scramble_victory(void)
+{
+    if (!sound_initialized) {
+        sound_init();
+    }
+
+    uint32_t save = save_and_disable_interrupts();
+
+    // Canales 1/2: esto manda sobre cualquier otra cosa que los
+    // estuviera usando, igual que hacen el jingle de Pac-Man y la
+    // música de Tetris.
+    menu_music_playing     = false;
+    tetris_music_playing   = false;
+    pacman_intro_active    = false;
+    channel2_siren_active  = false;
+    channel2_engine_active = false;
+    channel1_skid_active   = false;
+    toccata_playing        = false;
+
+    scramble_win_active   = true;
+    scramble_win_ch1_done = false;
+    scramble_win_ch2_done = false;
+    scramble_win_ch1_index = 0;
+    scramble_win_ch2_index = 0;
+
+    configure_channel(&channel1, scramble_win_ch1_freq[0], SCRAMBLE_WIN_CH1_VOLUME, WAVE_TRIANGLE);
+    configure_channel(&channel2, scramble_win_ch2_freq[0], SCRAMBLE_WIN_CH2_VOLUME, WAVE_SQUARE);
+
+    scramble_win_ch1_next = make_timeout_time_ms(scramble_win_ch1_dur[0]);
+    scramble_win_ch2_next = make_timeout_time_ms(scramble_win_ch2_dur[0]);
+
+    restore_interrupts(save);
+}
+
+
+/*
+ * Corta la fanfarria antes de tiempo (p.ej. al salir del juego a
+ * mitad). Si ya había terminado sola, no hace nada raro.
+ */
+void sound_stop_scramble_victory(void)
+{
+    uint32_t save = save_and_disable_interrupts();
+
+    scramble_win_active = false;
+
+    disable_channel(&channel1);
+    disable_channel(&channel2);
+
+    restore_interrupts(save);
+}
+
+
+bool sound_scramble_victory_is_playing(void)
+{
+    return scramble_win_active;
+}
+
+
+/*
+ * Arranca la Toccata y fuga en re menor BWV 565 de Bach como jingle
+ * de inicio de Paratrooper (canal 1 + canal 2): UNA SOLA PASADA de
+ * ~8.6s, no en bucle -- igual que sound_start_pacman_intro(). Termina
+ * sola y a partir de ahí solo se oyen los efectos del canal 3; llamar
+ * a sound_stop_paratrooper_music() la corta antes de tiempo si hace
+ * falta (p.ej. si se sale del juego a mitad). Ver notas junto a los
+ * arrays toccata_ch1/ch2 más arriba.
+ *
+ * Canal 3 libre, como siempre: los disparos y explosiones del juego
+ * se siguen oyendo por encima mientras suena.
+ */
+void sound_start_paratrooper_music(void)
+{
+    if (!sound_initialized) {
+        sound_init();
+    }
+
+    uint32_t save = save_and_disable_interrupts();
+
+    // Canales 1/2: esto manda sobre cualquier otra cosa que los
+    // estuviera usando.
+    menu_music_playing     = false;
+    tetris_music_playing   = false;
+    pacman_intro_active    = false;
+    scramble_win_active    = false;
+    channel2_siren_active  = false;
+    channel2_engine_active = false;
+    channel1_skid_active   = false;
+
+    toccata_playing = true;
+    toccata_index   = 0;
+
+    configure_channel(&channel1, toccata_ch1_freq[0], TOCCATA_CH1_VOLUME, WAVE_TRIANGLE);
+    configure_channel(&channel2, toccata_ch2_freq[0], TOCCATA_CH2_VOLUME, WAVE_SQUARE);
+
+    toccata_next = make_timeout_time_ms(toccata_dur[0]);
+
+    restore_interrupts(save);
+}
+
+
+/*
+ * Para la música de Paratrooper (p.ej. al terminar la partida o al
+ * salir del juego).
+ */
+void sound_stop_paratrooper_music(void)
+{
+    uint32_t save = save_and_disable_interrupts();
+
+    toccata_playing = false;
+
+    disable_channel(&channel1);
+    disable_channel(&channel2);
+
+    restore_interrupts(save);
+}
+
+
+/* Refleja si la pasada sigue sonando -- se pone sola a false en
+ * cuanto termina (ver el bloque de avance en sound_update()). */
+bool sound_paratrooper_music_is_playing(void)
+{
+    return toccata_playing;
+}
+
+
+/* ============================================================
+ * SELECCIÓN DE PISTA DEL MENÚ
+ * ============================================================ */
+
+/*
+ * Elige la pista del menú (0 = Greensleeves, 1 = Neon Circuit,
+ * 2 = Star Patrol). Si la música ya está sonando, el cambio se nota
+ * de inmediato: se reinicia el índice y se reconfiguran los canales
+ * con la nota 0 de la pista nueva. Un valor fuera de rango se
+ * ignora, así que no hace falta validarlo en el sitio de la llamada.
+ */
+void sound_set_menu_track(uint8_t track)
+{
+    if (track >= MENU_TRACK_COUNT) {
+        return;
+    }
+
+    uint32_t save = save_and_disable_interrupts();
+
+    menu_track  = track;
+    music_index = 0;
+
+    if (menu_music_playing) {
+        configure_channel(
+            &channel1,
+            menu_tracks[menu_track].melody[0],
+            MENU_MUSIC_CH1_VOLUME,
+            WAVE_TRIANGLE
+        );
+        configure_channel(
+            &channel2,
+            menu_tracks[menu_track].bass[0],
+            MENU_MUSIC_CH2_VOLUME,
+            WAVE_TRIANGLE
+        );
+        music_next_change =
+            make_timeout_time_ms(menu_tracks[menu_track].durations[0]);
+    }
+
+    restore_interrupts(save);
+}
+
+
+/* Pasa a la siguiente pista, volviendo a la 0 tras la última. */
+void sound_next_menu_track(void)
+{
+    sound_set_menu_track((uint8_t)((menu_track + 1) % MENU_TRACK_COUNT));
+}
+
+
+uint8_t sound_get_menu_track(void)
+{
+    return menu_track;
+}
+
+
+/*
+ * Duración en ms de UNA vuelta completa a la pista de menú "track"
+ * (la suma de todas sus duraciones -- Greensleeves ~29.9s, Neon
+ * Circuit ~12.8s, Star Patrol ~9.6s). Pensada para que quien reproduce
+ * la música sepa cuándo ha terminado un ciclo y toca pararla, sin
+ * tener que llevar esa cuenta por su cuenta -- p.ej. para encadenar
+ * varias pistas con un silencio entre medias, como hace el menú
+ * principal (menu_run() en menu.c).
+ *
+ * Un valor de "track" fuera de rango devuelve 0.
+ */
+uint32_t sound_menu_track_duration_ms(uint8_t track)
+{
+    if (track >= MENU_TRACK_COUNT) {
+        return 0;
+    }
+
+    uint32_t total = 0;
+    for (uint16_t i = 0; i < menu_tracks[track].count; i++) {
+        total += menu_tracks[track].durations[i];
+    }
+    return total;
+}
+
+
+/*
  * Arranca la música in-game de Tetris (canal 1 + canal 2), en bucle
  * hasta llamar a sound_stop_tetris_music(). Ver notas junto a los
  * arrays tetris_music_ch1/ch2 más arriba.
@@ -2197,6 +3066,8 @@ void sound_start_tetris_music(void)
     channel2_engine_active = false;
     channel1_skid_active   = false;
     pacman_intro_active    = false;
+    scramble_win_active    = false;
+    toccata_playing        = false;
 
     tetris_music_playing  = true;
     tetris_music_ch1_index = 0;

@@ -513,6 +513,12 @@ static void game_start(void) {
     cannon_alive=true; cannon_inv=TICKS_S*2; cannon_enc_acc=0;
     fire_held=false;
     reset_wave();
+    // Jingle de inicio (una sola pasada, ~8.6s) -- se apaga solo y a
+    // partir de ahí solo se oyen los efectos (sound_effect_shoot/
+    // explosion/..., y la sirena del avión, que cede/retoma el canal 2
+    // sin cortar la música mientras suena -- ver sound_update() y
+    // sound_siren_stop() en sound.c).
+    sound_start_paratrooper_music();
     state=PT_PLAYING;
 }
 
@@ -1619,6 +1625,7 @@ static void pt_tick(void) {
         if (!cannon_alive) {
             for (int i=0;i<MAX_HELIS;i++) helis[i].active=false;
             state=PT_DEAD; pause_cnt=TICKS_S*3;
+            sound_stop_paratrooper_music(); // por si el jingle de inicio seguía sonando
             draw_playing_frame();
             break;
         }
@@ -1743,5 +1750,6 @@ void game_paratrooper_run(game_mode_t mode) {
     }
 
     sound_siren_stop();
+    sound_stop_paratrooper_music(); // por si se sale a mitad del jingle de inicio
     highscores_flush();
 }

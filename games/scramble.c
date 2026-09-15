@@ -362,14 +362,23 @@ static EnemyBullet enemy_bullets[MAX_ENEMY_BULLETS];
 // Partículas de explosión (versión reducida del HTML para no saturar
 // el bus SPI con demasiados renderer_fill_rect() por frame).
 // ---------------------------------------------------------------------------
-#define MAX_PARTICLES 48
+// Subido de 48 a 110: la muerte del jefe lanza varias oleadas de
+// partículas solapadas (ver boss_boom_ticks en scr_tick()) y con 48
+// se agotaba el pool enseguida, así que las oleadas siguientes se
+// quedaban sin partículas y la explosión se veía pobre.
+#define MAX_PARTICLES 110
 
 typedef struct { bool active; float x,y,vx,vy; int life; uint16_t color; } Particle;
 static Particle particles[MAX_PARTICLES];
 
-static void add_explosion(float x, float y, bool big) {
+// Tamaños de explosión. HUGE es el de la muerte del jefe: más
+// partículas, más rápidas y con vida más larga que el "big" normal
+// (que se sigue usando para la nave del jugador).
+typedef enum { BOOM_SMALL, BOOM_BIG, BOOM_HUGE } boom_size_t;
+
+static void add_explosion_sz(float x, float y, boom_size_t sz) {
     static const uint16_t pcolors[4] = { COLOR_WHITE, COLOR_YELLOW, COLOR_RED, COLOR_CYAN };
-    int count = big ? 40 : 8;
+    int count = (sz==BOOM_HUGE) ? 34 : (sz==BOOM_BIG) ? 40 : 8;
     int created = 0;
     for (int i=0;i<MAX_PARTICLES && created<count;i++) {
         if (particles[i].active) continue;
@@ -377,13 +386,22 @@ static void add_explosion(float x, float y, bool big) {
         p->active = true;
         p->x = x; p->y = y;
         float angle = rng_float() * 2.0f * (float)M_PI;
-        float speed = big ? (1.5f + rng_float()*6.0f) : (1.0f + rng_float()*3.5f);
+        float speed = (sz==BOOM_HUGE) ? (2.0f + rng_float()*8.0f)
+                    : (sz==BOOM_BIG)  ? (1.5f + rng_float()*6.0f)
+                                      : (1.0f + rng_float()*3.5f);
         p->vx = cosf(angle) * speed;
         p->vy = sinf(angle) * speed;
-        p->life = big ? (18 + (int)(rng_next()%20)) : (10 + (int)(rng_next()%10));
+        p->life = (sz==BOOM_HUGE) ? (30 + (int)(rng_next()%30))
+                : (sz==BOOM_BIG)  ? (18 + (int)(rng_next()%20))
+                                  : (10 + (int)(rng_next()%10));
         p->color = pcolors[rng_next() % 4];
         created++;
     }
+}
+
+// Se mantiene la firma antigua para no tocar el resto de llamadas.
+static void add_explosion(float x, float y, bool big) {
+    add_explosion_sz(x, y, big ? BOOM_BIG : BOOM_SMALL);
 }
 
 static void update_particles(void) {
@@ -476,9 +494,7 @@ static void init_big_ship(int32_t scroll_px_now) {
             num_bricks++;
         }
     }
-    
-    int32_t zone_start_px = (int32_t)ZONE_BIG_SHIP * ZONE_LENGTH;
-    alien_x = zone_start_px + PLAY_W - 80;
+    alien_x = scroll_px_now + PLAY_W + 40;
     alien_base_y = PLAY_Y + 35;
     alien_t = rng_float() * 2.0f * (float)M_PI;
     alien_hp = ALIEN_MAX_HP;
@@ -513,6 +529,14 @@ typedef enum {
 static ScrState state;
 static bool demo, g_done;
 static bool scroll_locked, boss_engaged;
+
+// Muerte del jefe: durante BOSS_BOOM_TICKS el OVNI deja de dibujarse
+// y se van soltando oleadas de explosiones repartidas por donde
+// estaba su cuerpo, en vez de un único estallido en el centro.
+#define BOSS_BOOM_TICKS (TICKS_S*2)
+static int  boss_boom_ticks;
+static int  boss_boom_x, boss_boom_y;   // esquina sup-izq del OVNI al morir
+static bool boss_destroyed;
 static int  blink, demo_ticks, pause_cnt;
 static int  lives, level, score, fuel, fuel_cd;
 static int  zone;
@@ -564,6 +588,8 @@ static void game_start(void) {
     next_spawn_world = 250;
     scroll_locked = false;
     boss_engaged = false;
+    boss_destroyed = false;
+    boss_boom_ticks = 0;
     rng_state_v = (uint32_t)time_us_32();
     randomize_level_colors();
 
@@ -582,6 +608,8 @@ static void next_level_setup(void) {
     zone = ZONE_STEEP_MOUNTAINS;
     scroll_locked = false;
     boss_engaged = false;
+    boss_destroyed = false;
+    boss_boom_ticks = 0;
     scroll_px = 0; scroll_acc = 0;
     scroll_spd = SCROLL_SPD0 + (level-1)*SCROLL_SPD_INC;
     if (scroll_spd > SCROLL_SPD_MAX) scroll_spd = SCROLL_SPD_MAX;
@@ -750,7 +778,7 @@ static void try_shoot(void) {
         bullets[i].x = ship_x+SHIP_W;
         bullets[i].y = ship_y+SHIP_H/2-1;
         shoot_cd = SHOOT_COOLDOWN;
-        sound_effect_shoot();
+        sound_effect_laser();
         return;
     }
 }
@@ -765,7 +793,7 @@ static void try_bomb(void) {
         bombs[i].vx = BOMB_INIT_VX;
         bombs[i].vy = BOMB_INIT_VY;
         bomb_cd = BOMB_COOLDOWN;
-        sound_effect_shoot();
+        sound_effect_bounce();
         return;
     }
 }
@@ -812,10 +840,24 @@ static bool check_alien_hit(float x, float y, int w, int h) {
         sound_effect_select();
         add_explosion(ax+ALIEN_CORE_W/2, ay+ALIEN_CORE_H/2, false);
         if (alien_hp <= 0) {
-            sound_effect_success();
-            add_explosion(ax+ALIEN_CORE_W/2, ay+ALIEN_CORE_H/2, true);
+            // Fanfarria completa en vez del "beep" de sound_effect_success():
+            // usa canales 1+2 y deja libre el 3, así los estallidos de las
+            // oleadas siguientes se siguen oyendo por encima.
+            sound_start_scramble_victory();
+
+            // Primer estallido en el núcleo; el resto lo va soltando
+            // scr_tick() mientras boss_boom_ticks baja, repartido por
+            // todo el cuerpo del OVNI (ver BOSS_BOOM_TICKS).
+            add_explosion_sz(ax+ALIEN_CORE_W/2, ay+ALIEN_CORE_H/2, BOOM_HUGE);
+            boss_boom_x = alien_screen_x();
+            boss_boom_y = (int)top;
+            boss_boom_ticks = BOSS_BOOM_TICKS;
+            boss_destroyed = true;
+
             score += SCR_ALIEN_BONUS * level;
-            pause_cnt = TICKS_S*3;
+            // Antes TICKS_S*3: se alarga para que dé tiempo a ver la
+            // explosión entera y a que suene la fanfarria (~3200ms).
+            pause_cnt = TICKS_S*5;
             state = SCR_VICTORY;
         }
         return true;
@@ -982,16 +1024,18 @@ static void update_scroll(void) {
 static void update_big_ship(void) {
     if (zone != ZONE_BIG_SHIP) return;
 
-        // Calculamos cuántos píxeles de la pantalla actual pertenecen a la zona del jefe
-    int32_t zone_start_px = (int32_t)(ZONE_BIG_SHIP * ZONE_LENGTH);
-    int32_t screen_left_px = scroll_px - 80;
-
     int base_sx = alien_screen_x();
-
-    if (!scroll_locked && screen_left_px >= zone_start_px) {
+    if (!scroll_locked && base_sx <= PLAY_X+PLAY_W-160) {
         scroll_locked = true;
         boss_engaged = true;
- 
+        // Al congelar el scroll para el combate, cualquier cohete/fuel/base
+        // que aún estuviera en pantalla deja de recibir scroll (su sx sólo
+        // depende de world_x - scroll_px, y scroll_px ya no avanza), así
+        // que se quedaba "flotando" fijo para siempre -- la franja de
+        // basura por la izquierda que se veía en el nivel del jefe. Los
+        // OVNIs y meteoritos no tienen este problema (se mueven solos por
+        // world_x independientemente del scroll), así que basta con
+        // limpiar aquí el resto del pool.
         for (int i=0;i<MAX_OBJECTS;i++) {
             if (gobjs[i].active && gobjs[i].type != OBJ_UFO && gobjs[i].type != OBJ_METEOR)
                 gobjs[i].active = false;
@@ -1085,19 +1129,46 @@ static void draw_terrain(void) {
     for (int i=0;i<NUM_COLS;i++) {
         int32_t world_x = (start_col + i) * COL_W;
         int screen_x = PLAY_X + offset_x + i*COL_W;
+        int col_w = COL_W;
+
+        // renderer_fill_rect() recibe x como uint16_t: un screen_x
+        // negativo (columna 0 cuando offset_x anda cerca de -(COL_W-1),
+        // ~84% de los valores posibles) se convertiría al pasarlo en un
+        // número gigante y st7789_fill_rect() descartaría la llamada
+        // ENTERA sin dibujar nada -- ni siquiera la parte que sí cae en
+        // pantalla. Con scroll normal se autocorrige solo frame a
+        // frame (offset_x cambia constantemente), pero en el nivel del
+        // jefe el scroll queda fijo (scroll_locked): si el offset
+        // congelado es de los malos, la columna izquierda del terreno
+        // no se repinta en TODO el combate, y ahí se acumulan sin
+        // borrar los rastros de nave/balas que sí se dibujan encima.
+        // Recortamos la columna a la parte visible en vez de perderla.
+        if (screen_x < PLAY_X) {
+            col_w -= (PLAY_X - screen_x);
+            screen_x = PLAY_X;
+            if (col_w <= 0) continue;
+        }
+        // Por la derecha no hay bug de signo (el driver ya recorta al
+        // ancho del panel), pero NUM_COLS lleva 2 columnas de margen y
+        // sin esto la última se comería el borde blanco del marco.
+        if (screen_x + col_w > PLAY_X + PLAY_W) {
+            col_w = PLAY_X + PLAY_W - screen_x;
+            if (col_w <= 0) continue;
+        }
+
         int col_zone = zone_for_world(world_x);
 
         int fh = floor_h_for(world_x, col_zone);
         int ch = ceil_h_for(world_x, col_zone);
         int ground_top = PLAY_Y+PLAY_H-1-fh;
 
-        if (ch > 0) renderer_fill_rect(screen_x, PLAY_Y+1, COL_W, ch, zone_colors[col_zone]);
+        if (ch > 0) renderer_fill_rect(screen_x, PLAY_Y+1, col_w, ch, zone_colors[col_zone]);
 
         int sky_y0 = PLAY_Y+1+ch;
         int sky_h  = ground_top - sky_y0;
-        if (sky_h > 0) renderer_fill_rect(screen_x, sky_y0, COL_W, sky_h, COLOR_BLACK);
+        if (sky_h > 0) renderer_fill_rect(screen_x, sky_y0, col_w, sky_h, COLOR_BLACK);
 
-        renderer_fill_rect(screen_x, ground_top, COL_W, fh, zone_colors[col_zone]);
+        renderer_fill_rect(screen_x, ground_top, col_w, fh, zone_colors[col_zone]);
     }
 }
 
@@ -1176,6 +1247,9 @@ static void draw_alien_icon(int cx, int cy) {
 
 static void draw_big_ship(void) {
     if (zone != ZONE_BIG_SHIP) return;
+    // Una vez muerto no se dibuja: en su sitio quedan solo las oleadas
+    // de partículas que va soltando scr_tick() durante SCR_VICTORY.
+    if (boss_destroyed) return;
     float top = alien_top();
     int ax = alien_screen_x();
 
@@ -1326,10 +1400,6 @@ static void draw_zone_banner(void) {
 }
 
 static void draw_playing_frame(void) {
-    if (zone == ZONE_BIG_SHIP) {
-        renderer_clear(COLOR_BLACK);
-    }
-    
     draw_terrain();
     draw_objects();
     draw_big_ship();
@@ -1337,15 +1407,12 @@ static void draw_playing_frame(void) {
     draw_bullets();
     draw_bombs();
     draw_particles();
-
-    if (state == SCR_PLAYING || state == SCR_DEAD)
-        draw_ship();
-
+    if (state == SCR_PLAYING || state == SCR_DEAD) draw_ship();
     draw_hud();
     draw_zone_banner();
-
     renderer_flush();
 }
+
 // ---------------------------------------------------------------------------
 // Pantallas estáticas
 // ---------------------------------------------------------------------------
@@ -1544,9 +1611,23 @@ static void scr_tick(void) {
         break;
 
     case SCR_VICTORY:
+        // Oleadas sucesivas repartidas por el cuerpo del OVNI mientras
+        // dura boss_boom_ticks: cada 4 ticks un estallido nuevo en un
+        // punto al azar de la parrilla, para que se vea desmontarse
+        // entero en vez de un único fogonazo central.
+        if (boss_boom_ticks > 0) {
+            boss_boom_ticks--;
+            if ((boss_boom_ticks % 4) == 0) {
+                float ex = boss_boom_x + (float)(rng_next() % (SHIP_GRID_COLS*BRICK_W));
+                float ey = boss_boom_y + (float)(rng_next() % (SHIP_GRID_ROWS*BRICK_H));
+                add_explosion_sz(ex, ey, BOOM_HUGE);
+                sound_effect_explosion();   // canal 3, por encima de la fanfarria
+            }
+        }
         update_particles();
         draw_playing_frame();
-        draw_victory_screen();
+        // El cartel espera a que pase lo gordo de la explosión.
+        if (boss_boom_ticks <= 0) draw_victory_screen();
         if (--pause_cnt <= 0) {
             next_level_setup();
             pause_cnt = TICKS_S*2;
@@ -1624,6 +1705,10 @@ void game_scramble_run(game_mode_t mode) {
         }
 #endif
     }
+
+    // Por si se sale del juego justo mientras sonaba la fanfarria de
+    // victoria (canales 1+2): si ya había terminado sola, no hace nada.
+    sound_stop_scramble_victory();
 
     highscores_flush();
 }

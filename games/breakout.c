@@ -842,7 +842,7 @@ static void update_powerups(void) {
         if (powerups[i].x+PU_W > pad_x && powerups[i].x < pad_x+pad_w &&
             powerups[i].y+PU_H > PAD_Y && powerups[i].y < PAD_Y+PAD_H) {
             powerups[i].active = false;
-            sound_effect_select();
+            sound_effect_powerup();
             activate_powerup(powerups[i].type);
         }
     }
@@ -974,7 +974,7 @@ static void brk_tick(void) {
         draw_playing_frame();
         if (--pause_cnt <= 0) {
             if (lives <= 0) {
-                sound_effect_game_over();
+                sound_effect_teleport();
                 draw_playing_frame();
                 if (!demo && highscores_is_top(BRK_GAME_ID, score)) {
                     highscores_enter(BRK_GAME_ID, (uint32_t)score); // bloqueante
