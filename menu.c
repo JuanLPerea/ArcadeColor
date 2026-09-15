@@ -983,17 +983,30 @@ static void run_test_screen(void)
  * -----------------------------------------------------------
  * PRUEBA SONIDO
  *
- * Lista navegable para probar cada canal/efecto por separado:
- * canal 1+2 (música del menú), canal 2 (sirena) y canal 3 (los
- * distintos efectos). Arriba/abajo mueve la selección, seleccionar
- * dispara el efecto (o hace toggle en música/sirena). "VOLVER"
- * sale de vuelta al submenú de opciones.
+ * Carrete navegable (mismo estilo que el menú principal: prev/
+ * centro/next, con el central resaltado y en tamaño ajustado a lo
+ * que quepa) con TODAS las músicas y efectos de sound.h -- música
+ * de menú (+ cambio de pista), Tetris, victoria de Scramble,
+ * Paratrooper, intro de Pac-Man, sirena, motor, derrape, los 8
+ * efectos básicos, los 12 efectos añadidos y los 6 de Pac-Man.
+ * Arriba/abajo mueve la selección, seleccionar dispara el efecto (o
+ * hace toggle si tiene estado propio: música/sirena/motor/derrape).
+ * "VOLVER" sale de vuelta al submenú de opciones.
  * -----------------------------------------------------------
  */
 
 typedef enum {
-    SND_MUSIC_TOGGLE = 0,
-    SND_SIREN_TOGGLE,
+    SND_MUSIC_MENU = 0,
+    SND_MUSIC_MENU_NEXT_TRACK,
+    SND_MUSIC_TETRIS,
+    SND_MUSIC_SCRAMBLE_VICTORY,
+    SND_MUSIC_PARATROOPER,
+    SND_MUSIC_PACMAN_INTRO,
+
+    SND_SIREN,
+    SND_ENGINE,
+    SND_SKID,
+
     SND_FX_SHOOT,
     SND_FX_EXPLOSION,
     SND_FX_SELECT,
@@ -1002,27 +1015,328 @@ typedef enum {
     SND_FX_SUCCESS,
     SND_FX_LOSE_POINT,
     SND_FX_VICTORY,
+
+    SND_FX_LASER,
+    SND_FX_LASER_BIG,
+    SND_FX_POWERUP,
+    SND_FX_POWERDOWN,
+    SND_FX_COIN,
+    SND_FX_JUMP,
+    SND_FX_HIT,
+    SND_FX_ALARM,
+    SND_FX_TELEPORT,
+    SND_FX_BOUNCE,
+    SND_FX_THRUST,
+    SND_FX_EXTRA_LIFE,
+
+    SND_PACMAN_CHOMP,
+    SND_PACMAN_POWER,
+    SND_PACMAN_FRUIT,
+    SND_PACMAN_EAT_GHOST,
+    SND_PACMAN_DEATH,
+    SND_PACMAN_LEVELUP,
+
     SND_BACK,
     SND_ITEM_COUNT
 } sound_test_item_t;
 
-static const char *sound_test_item_names[SND_ITEM_COUNT] = {
-    "CANAL 1+2: MUSICA MENU",
-    "CANAL 2: SIRENA",
-    "CANAL 3: EFECTO DISPARO",
-    "CANAL 3: EFECTO EXPLOSION",
-    "CANAL 3: EFECTO SELECCION",
-    "CANAL 3: EFECTO MOVIMIENTO",
-    "CANAL 3: EFECTO GAME OVER",
-    "CANAL 3: EFECTO EXITO",
-    "CANAL 3: EFECTO PIERDE PUNTO",
-    "CANAL 3: EFECTO VICTORIA",
-    "VOLVER"
+/*
+ * Nombres base (sin estado). Los elementos con estado propio
+ * (música / sirena / motor / derrape) lo añaden dinámicamente en
+ * sound_test_item_label() -- por eso aquí solo hace falta el nombre
+ * "en reposo".
+ */
+static const char *sound_test_base_names[SND_ITEM_COUNT] = {
+    [SND_MUSIC_MENU]             = "MUSICA MENU",
+    [SND_MUSIC_MENU_NEXT_TRACK]  = "SIGUIENTE PISTA MENU",
+    [SND_MUSIC_TETRIS]           = "MUSICA TETRIS",
+    [SND_MUSIC_SCRAMBLE_VICTORY] = "VICTORIA SCRAMBLE",
+    [SND_MUSIC_PARATROOPER]      = "MUSICA PARATROOPER",
+    [SND_MUSIC_PACMAN_INTRO]     = "INTRO PACMAN",
+
+    [SND_SIREN]  = "SIRENA",
+    [SND_ENGINE] = "MOTOR (RAMPA)",
+    [SND_SKID]   = "DERRAPE",
+
+    [SND_FX_SHOOT]      = "EFECTO: DISPARO",
+    [SND_FX_EXPLOSION]  = "EFECTO: EXPLOSION",
+    [SND_FX_SELECT]     = "EFECTO: SELECCION",
+    [SND_FX_MOVE]       = "EFECTO: MOVIMIENTO",
+    [SND_FX_GAME_OVER]  = "EFECTO: GAME OVER",
+    [SND_FX_SUCCESS]    = "EFECTO: EXITO",
+    [SND_FX_LOSE_POINT] = "EFECTO: PIERDE PUNTO",
+    [SND_FX_VICTORY]    = "EFECTO: VICTORIA",
+
+    [SND_FX_LASER]      = "EFECTO: LASER",
+    [SND_FX_LASER_BIG]  = "EFECTO: LASER GRANDE",
+    [SND_FX_POWERUP]    = "EFECTO: MEJORA",
+    [SND_FX_POWERDOWN]  = "EFECTO: PIERDE PODER",
+    [SND_FX_COIN]       = "EFECTO: MONEDA",
+    [SND_FX_JUMP]       = "EFECTO: SALTO",
+    [SND_FX_HIT]        = "EFECTO: IMPACTO",
+    [SND_FX_ALARM]      = "EFECTO: ALARMA",
+    [SND_FX_TELEPORT]   = "EFECTO: TELETRANSPORTE",
+    [SND_FX_BOUNCE]     = "EFECTO: REBOTE",
+    [SND_FX_THRUST]     = "EFECTO: PROPULSOR",
+    [SND_FX_EXTRA_LIFE] = "EFECTO: 1UP",
+
+    [SND_PACMAN_CHOMP]     = "PACMAN: CHOMP",
+    [SND_PACMAN_POWER]     = "PACMAN: POWER PELLET",
+    [SND_PACMAN_FRUIT]     = "PACMAN: FRUTA",
+    [SND_PACMAN_EAT_GHOST] = "PACMAN: FANTASMA COMIDO",
+    [SND_PACMAN_DEATH]     = "PACMAN: MUERTE",
+    [SND_PACMAN_LEVELUP]   = "PACMAN: NIVEL SUPERADO",
+
+    [SND_BACK] = "VOLVER"
 };
 
-static bool sound_test_siren_on = false;
+/*
+ * Estado local de los elementos que no tienen su propio
+ * "is_playing()" en sound.h (sirena, motor, derrape) y del
+ * alternado tic/tac del chomp de Pac-Man.
+ */
+static bool  sound_test_siren_on        = false;
+static bool  sound_test_engine_on       = false;
+static bool  sound_test_skid_on         = false;
+static bool  sound_test_pacman_chomp_alt = false;
+static float sound_test_engine_phase    = 0.0f;
 
-static void draw_sound_test_menu(int selected)
+#define SOUND_TEST_ENGINE_RAMP_SPEED 0.05f
+
+
+static int snd_wrap_index(int idx)
+{
+    idx %= SND_ITEM_COUNT;
+
+    if (idx < 0) {
+        idx += SND_ITEM_COUNT;
+    }
+
+    return idx;
+}
+
+
+/*
+ * Nombre a mostrar para el elemento "idx", con su estado (SONANDO /
+ * PARADA / ACTIVA...) añadido cuando aplica. Se llama tanto para el
+ * elemento central como para los de arriba/abajo del carrete, así
+ * que el estado se ve incluso antes de tenerlo seleccionado.
+ */
+static void sound_test_item_label(
+    int idx,
+    char *buf,
+    size_t buf_size
+)
+{
+    idx = snd_wrap_index(idx);
+
+    switch (idx) {
+        case SND_MUSIC_MENU:
+            snprintf(
+                buf, buf_size, "MUSICA MENU: %s",
+                sound_menu_music_is_playing() ? "SONANDO" : "PARADA"
+            );
+            break;
+
+        case SND_MUSIC_MENU_NEXT_TRACK: {
+            static const char *track_names[SOUND_MENU_TRACK_COUNT] = {
+                "GREENSLEEVES", "NEON CIRCUIT", "STAR PATROL"
+            };
+
+            uint8_t track = sound_get_menu_track();
+
+            snprintf(
+                buf, buf_size, "PISTA MENU: %s",
+                (track < SOUND_MENU_TRACK_COUNT) ? track_names[track] : "?"
+            );
+            break;
+        }
+
+        case SND_MUSIC_TETRIS:
+            snprintf(
+                buf, buf_size, "MUSICA TETRIS: %s",
+                sound_tetris_music_is_playing() ? "SONANDO" : "PARADA"
+            );
+            break;
+
+        case SND_MUSIC_SCRAMBLE_VICTORY:
+            snprintf(
+                buf, buf_size, "VICTORIA SCRAMBLE: %s",
+                sound_scramble_victory_is_playing() ? "SONANDO" : "PARADA"
+            );
+            break;
+
+        case SND_MUSIC_PARATROOPER:
+            snprintf(
+                buf, buf_size, "PARATROOPER: %s",
+                sound_paratrooper_music_is_playing() ? "SONANDO" : "PARADA"
+            );
+            break;
+
+        case SND_SIREN:
+            snprintf(
+                buf, buf_size, "SIRENA: %s",
+                sound_test_siren_on ? "ACTIVA" : "PARADA"
+            );
+            break;
+
+        case SND_ENGINE:
+            snprintf(
+                buf, buf_size, "MOTOR: %s",
+                sound_test_engine_on ? "SONANDO" : "PARADO"
+            );
+            break;
+
+        case SND_SKID:
+            snprintf(
+                buf, buf_size, "DERRAPE: %s",
+                sound_test_skid_on ? "SONANDO" : "PARADO"
+            );
+            break;
+
+        default:
+            snprintf(buf, buf_size, "%s", sound_test_base_names[idx]);
+            break;
+    }
+}
+
+
+/*
+ * Dispara/activa el elemento "idx". Los elementos con estado propio
+ * (música, sirena, motor, derrape) hacen toggle; el resto suena una
+ * vez. SND_BACK se gestiona en run_test_sound(), no aquí.
+ */
+static void sound_test_activate(int idx)
+{
+    idx = snd_wrap_index(idx);
+
+    switch (idx) {
+        case SND_MUSIC_MENU:
+            if (sound_menu_music_is_playing()) {
+                sound_stop_menu_music();
+            } else {
+                sound_start_menu_music();
+            }
+            break;
+
+        case SND_MUSIC_MENU_NEXT_TRACK:
+            sound_next_menu_track();
+            break;
+
+        case SND_MUSIC_TETRIS:
+            if (sound_tetris_music_is_playing()) {
+                sound_stop_tetris_music();
+            } else {
+                sound_start_tetris_music();
+            }
+            break;
+
+        case SND_MUSIC_SCRAMBLE_VICTORY:
+            if (sound_scramble_victory_is_playing()) {
+                sound_stop_scramble_victory();
+            } else {
+                sound_start_scramble_victory();
+            }
+            break;
+
+        case SND_MUSIC_PARATROOPER:
+            if (sound_paratrooper_music_is_playing()) {
+                sound_stop_paratrooper_music();
+            } else {
+                sound_start_paratrooper_music();
+            }
+            break;
+
+        case SND_MUSIC_PACMAN_INTRO:
+            /* No tiene is_playing(): cada pulsación la relanza. */
+            sound_start_pacman_intro();
+            break;
+
+        case SND_SIREN:
+            if (sound_test_siren_on) {
+                sound_siren_stop();
+                sound_test_siren_on = false;
+            } else {
+                sound_siren_start();
+                sound_test_siren_on = true;
+            }
+            break;
+
+        case SND_ENGINE:
+            sound_test_engine_on = !sound_test_engine_on;
+
+            if (sound_test_engine_on) {
+                sound_test_engine_phase = 0.0f;
+            } else {
+                sound_engine_stop();
+            }
+            break;
+
+        case SND_SKID:
+            sound_test_skid_on = !sound_test_skid_on;
+
+            if (!sound_test_skid_on) {
+                sound_skid_stop();
+            }
+            break;
+
+        case SND_FX_SHOOT:      sound_effect_shoot();      break;
+        case SND_FX_EXPLOSION:  sound_effect_explosion();  break;
+        case SND_FX_SELECT:     sound_effect_select();     break;
+        case SND_FX_MOVE:       sound_effect_move();       break;
+        case SND_FX_GAME_OVER:  sound_effect_game_over();  break;
+        case SND_FX_SUCCESS:    sound_effect_success();    break;
+        case SND_FX_LOSE_POINT: sound_effect_lose_point(); break;
+        case SND_FX_VICTORY:    sound_effect_victory();    break;
+
+        case SND_FX_LASER:      sound_effect_laser();      break;
+        case SND_FX_LASER_BIG:  sound_effect_laser_big();  break;
+        case SND_FX_POWERUP:    sound_effect_powerup();    break;
+        case SND_FX_POWERDOWN:  sound_effect_powerdown();  break;
+        case SND_FX_COIN:       sound_effect_coin();       break;
+        case SND_FX_JUMP:       sound_effect_jump();       break;
+        case SND_FX_HIT:        sound_effect_hit();        break;
+        case SND_FX_ALARM:      sound_effect_alarm();      break;
+        case SND_FX_TELEPORT:   sound_effect_teleport();   break;
+        case SND_FX_BOUNCE:     sound_effect_bounce();     break;
+        case SND_FX_THRUST:     sound_effect_thrust();     break;
+        case SND_FX_EXTRA_LIFE: sound_effect_extra_life(); break;
+
+        case SND_PACMAN_CHOMP:
+            sound_effect_pacman_chomp(sound_test_pacman_chomp_alt);
+            sound_test_pacman_chomp_alt = !sound_test_pacman_chomp_alt;
+            break;
+
+        case SND_PACMAN_POWER:     sound_effect_pacman_power();     break;
+        case SND_PACMAN_FRUIT:     sound_effect_pacman_fruit();     break;
+        case SND_PACMAN_EAT_GHOST: sound_effect_pacman_eat_ghost(); break;
+        case SND_PACMAN_DEATH:     sound_effect_pacman_death();     break;
+        case SND_PACMAN_LEVELUP:   sound_effect_pacman_levelup();   break;
+    }
+}
+
+
+// Para todo lo que pueda estar sonando -- al entrar y al salir de
+// la pantalla de prueba de sonido, para dejar un estado conocido.
+static void sound_test_stop_everything(void)
+{
+    sound_stop_menu_music();
+    sound_stop_tetris_music();
+    sound_stop_scramble_victory();
+    sound_stop_paratrooper_music();
+    sound_stop_pacman_intro();
+    sound_siren_stop();
+    sound_engine_stop();
+    sound_skid_stop();
+    sound_effect_stop();
+
+    sound_test_siren_on = false;
+    sound_test_engine_on = false;
+    sound_test_skid_on = false;
+}
+
+
+static void draw_sound_test_header(void)
 {
     renderer_clear(COLOR_BLACK);
 
@@ -1037,45 +1351,157 @@ static void draw_sound_test_menu(int selected)
 
     renderer_fill_rect(10, DIVIDER_Y, TFT_WIDTH - 20, 2, COLOR_CYAN);
 
-    int y = 42;
-    int line_h = 14;
+    static const char *hint =
+        "ARRIBA/ABAJO MUEVE, SELECCIONA ACTIVA/PARA";
 
-    for (int i = 0; i < SND_ITEM_COUNT; i++) {
-        uint16_t color = (i == selected) ? COLOR_YELLOW : COLOR_WHITE;
-
-        renderer_draw_text(
-            16,
-            y + i * line_h,
-            sound_test_item_names[i],
-            color,
-            COLOR_BLACK,
-            1
-        );
-    }
-
-    char buf[40];
-    int state_y = y + SND_ITEM_COUNT * line_h + 8;
-
-    snprintf(
-        buf,
-        sizeof(buf),
-        "MUSICA: %s",
-        sound_menu_music_is_playing() ? "REPRODUCIENDO" : "PARADA"
+    renderer_draw_text(
+        centered_x(hint, 1),
+        215,
+        hint,
+        COLOR_CYAN,
+        COLOR_BLACK,
+        1
     );
-
-    renderer_draw_text(16, state_y, buf, COLOR_CYAN, COLOR_BLACK, 1);
-
-    snprintf(
-        buf,
-        sizeof(buf),
-        "SIRENA: %s",
-        sound_test_siren_on ? "ACTIVA" : "PARADA"
-    );
-
-    renderer_draw_text(16, state_y + 14, buf, COLOR_CYAN, COLOR_BLACK, 1);
-
-    renderer_flush();
 }
+
+
+/*
+ * Carrete de 3 posiciones (prev/centro/next), igual que el menú
+ * principal (ver draw_settled() más arriba) -- así caben las
+ * músicas y todos los efectos de sound.h sin amontonarse: solo se
+ * dibujan 3 a la vez y el nombre central se reduce de escala si no
+ * cabe (best_fit_scale()), igual que con los nombres largos de
+ * juegos.
+ */
+static void draw_sound_settled(int selected)
+{
+    clear_row(CENTER_Y - ITEM_SPACING);
+    clear_row(CENTER_Y);
+    clear_row(CENTER_Y + ITEM_SPACING);
+
+    char prev_buf[40];
+    char center_buf[40];
+    char next_buf[40];
+
+    sound_test_item_label(selected - 1, prev_buf, sizeof(prev_buf));
+    sound_test_item_label(selected, center_buf, sizeof(center_buf));
+    sound_test_item_label(selected + 1, next_buf, sizeof(next_buf));
+
+    draw_row(
+        CENTER_Y - ITEM_SPACING,
+        prev_buf,
+        PREV_NEXT_SCALE,
+        COLOR_WHITE
+    );
+
+    draw_row(
+        CENTER_Y,
+        center_buf,
+        best_fit_scale(center_buf, SELECTED_SCALE_MAX),
+        COLOR_YELLOW
+    );
+
+    draw_row(
+        CENTER_Y + ITEM_SPACING,
+        next_buf,
+        PREV_NEXT_SCALE,
+        COLOR_WHITE
+    );
+}
+
+
+/*
+ * Misma animación de deslizamiento que animate_transition() del
+ * menú principal, adaptada a sound_test_item_label() (que escribe
+ * en un buffer en vez de devolver un puntero fijo).
+ */
+static void snd_animate_transition(
+    int old_selected,
+    int new_selected,
+    int direction
+)
+{
+    char slide_center[40];
+    char slide_edge[40];
+
+    sound_test_item_label(old_selected, slide_center, sizeof(slide_center));
+    sound_test_item_label(new_selected, slide_edge, sizeof(slide_edge));
+
+    int y_center_start = CENTER_Y;
+
+    int y_center_end =
+        CENTER_Y -
+        direction * ITEM_SPACING;
+
+    int y_edge_start =
+        CENTER_Y +
+        direction * ITEM_SPACING;
+
+    int y_edge_end = CENTER_Y;
+
+    int y_vacating =
+        (direction > 0)
+        ? (CENTER_Y - ITEM_SPACING)
+        : (CENTER_Y + ITEM_SPACING);
+
+    int y_revealing =
+        (direction > 0)
+        ? (CENTER_Y + ITEM_SPACING)
+        : (CENTER_Y - ITEM_SPACING);
+
+    clear_row(y_vacating);
+    clear_row(y_revealing);
+
+    int y_center_prev = y_center_start;
+    int y_edge_prev = y_edge_start;
+
+    for (
+        int step = 1;
+        step <= ANIM_STEPS;
+        step++
+    ) {
+        int y_center =
+            y_center_start +
+            (y_center_end - y_center_start) *
+            step /
+            ANIM_STEPS;
+
+        int y_edge =
+            y_edge_start +
+            (y_edge_end - y_edge_start) *
+            step /
+            ANIM_STEPS;
+
+        clear_row(y_center_prev);
+        clear_row(y_edge_prev);
+        clear_row(y_center);
+        clear_row(y_edge);
+
+        draw_row(
+            y_center,
+            slide_center,
+            PREV_NEXT_SCALE,
+            COLOR_WHITE
+        );
+
+        draw_row(
+            y_edge,
+            slide_edge,
+            PREV_NEXT_SCALE,
+            COLOR_WHITE
+        );
+
+        renderer_flush();
+
+        y_center_prev = y_center;
+        y_edge_prev = y_edge;
+
+        sound_update();
+
+        sleep_ms(ANIM_STEP_DELAY_MS);
+    }
+}
+
 
 static void run_test_sound(void)
 {
@@ -1085,68 +1511,86 @@ static void run_test_sound(void)
      * Al entrar, garantizamos un estado conocido: nada sonando
      * hasta que el usuario elija qué probar.
      */
-    sound_stop_menu_music();
-    sound_siren_stop();
-    sound_test_siren_on = false;
+    sound_test_stop_everything();
 
-    draw_sound_test_menu(selected);
+    draw_sound_test_header();
+    draw_sound_settled(selected);
+    renderer_flush();
 
     while (true) {
         controls_update();
         sound_update();
 
-        bool redraw = false;
+        /*
+         * Rampa continua del test de motor -- se llama una vez por
+         * vuelta de bucle mientras esté activo, igual que exige
+         * sound_engine_set_speed() en sound.h.
+         */
+        if (sound_test_engine_on) {
+            sound_test_engine_phase += SOUND_TEST_ENGINE_RAMP_SPEED;
+
+            if (sound_test_engine_phase > 6.2831853f) {
+                sound_test_engine_phase -= 6.2831853f;
+            }
+
+            uint8_t speed =
+                (uint8_t)(
+                    (sinf(sound_test_engine_phase) * 0.5f + 0.5f) *
+                    255.0f
+                );
+
+            sound_engine_set_speed(speed);
+        }
+
+        /*
+         * sound_skid_start() no hace nada si ya está sonando, así
+         * que llamarlo cada vuelta mientras esté activo es seguro.
+         */
+        if (sound_test_skid_on) {
+            sound_skid_start();
+        }
+
+        int direction = 0;
+        int new_selected = selected;
 
         if (controls_menu_down()) {
-            selected = (selected + 1) % SND_ITEM_COUNT;
-            redraw = true;
+            new_selected = snd_wrap_index(selected + 1);
+            direction = 1;
         }
 
         if (controls_menu_up()) {
-            selected = (selected - 1 + SND_ITEM_COUNT) % SND_ITEM_COUNT;
-            redraw = true;
+            new_selected = snd_wrap_index(selected - 1);
+            direction = -1;
+        }
+
+        if (direction != 0) {
+            sound_effect_move();
+
+            snd_animate_transition(
+                selected,
+                new_selected,
+                direction
+            );
+
+            selected = new_selected;
+
+            draw_sound_settled(selected);
+            renderer_flush();
         }
 
         if (controls_menu_select()) {
-            switch (selected) {
-                case SND_MUSIC_TOGGLE:
-                    if (sound_menu_music_is_playing()) {
-                        sound_stop_menu_music();
-                    } else {
-                        sound_start_menu_music();
-                    }
-                    break;
+            int idx = snd_wrap_index(selected);
 
-                case SND_SIREN_TOGGLE:
-                    if (sound_test_siren_on) {
-                        sound_siren_stop();
-                        sound_test_siren_on = false;
-                    } else {
-                        sound_siren_start();
-                        sound_test_siren_on = true;
-                    }
-                    break;
-
-                case SND_FX_SHOOT:      sound_effect_shoot();      break;
-                case SND_FX_EXPLOSION:  sound_effect_explosion();  break;
-                case SND_FX_SELECT:     sound_effect_select();     break;
-                case SND_FX_MOVE:       sound_effect_move();       break;
-                case SND_FX_GAME_OVER:  sound_effect_game_over();  break;
-                case SND_FX_SUCCESS:    sound_effect_success();    break;
-                case SND_FX_LOSE_POINT: sound_effect_lose_point(); break;
-                case SND_FX_VICTORY:    sound_effect_victory();    break;
-
-                case SND_BACK:
-                    sound_stop_menu_music();
-                    sound_siren_stop();
-                    return;
+            if (idx == SND_BACK) {
+                sound_effect_select();
+                sound_test_stop_everything();
+                return;
             }
 
-            redraw = true;
-        }
+            sound_test_activate(idx);
 
-        if (redraw) {
-            draw_sound_test_menu(selected);
+            draw_sound_settled(selected);
+            renderer_flush();
         }
 
         sleep_ms(15);
@@ -1372,6 +1816,16 @@ static void show_options_screen(void)
                     return;
             }
 
+            /*
+             * Algunas de estas pruebas (PRUEBA CONTROLES, BORRAR
+             * RECORDS) leen el encoder directamente y no consumen
+             * el "pending" de controls_menu_up()/down(), así que
+             * puede quedar un giro acumulado -- lo descartamos al
+             * volver para que no se cuele como un cambio de
+             * selección aquí en OPCIONES.
+             */
+            controls_reset_menu_nav();
+
             draw_options_menu(selected);
         }
 
@@ -1442,6 +1896,13 @@ static void run_attract_cycle(
         games_list[game_index].run(
             ATTRACT_DEMO_MODE
         );
+
+        /*
+         * El demo del attract mode también lee el encoder sin
+         * pasar por controls_menu_up()/down() -- descartamos
+         * cualquier giro acumulado antes de volver al carrete.
+         */
+        controls_reset_menu_nav();
 
         highscores_flush();
     }
@@ -1605,6 +2066,18 @@ void menu_run(void)
 
                 highscores_flush();
             }
+
+            /*
+             * Tanto los juegos (leen el encoder con
+             * controls_get_raw_delta()) como OPCIONES (algunas de
+             * sus pruebas leen el encoder directamente) pueden
+             * dejar un giro acumulado sin consumir en el "pending"
+             * de controls_menu_up()/down(). Sin este reset, ese
+             * giro se dispararía como un cambio de selección en
+             * cuanto redibujemos el carrete principal -- que es
+             * justo el bug que veíamos al volver de una partida.
+             */
+            controls_reset_menu_nav();
 
             /*
              * Al regresar al menú, reiniciamos

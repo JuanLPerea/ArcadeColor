@@ -819,20 +819,30 @@ static void update_tower(void) {
 #define BOMB_DROP_DELAY  30
 
 /*
- * Ticks (nominales) que le quedan a la bomba hasta tocar el suelo,
- * dado su estado vertical actual. Se usa tanto al lanzarla como, cada
- * tick, para RECALCULAR la vx necesaria -- así el impacto siempre cae
- * justo en TURRET_X sin importar que el dt real fluctúe de un tick a
- * otro (antes se calculaba una vez al lanzar asumiendo un tick nominal
- * fijo, y con el dt real variable el número de ticks reales hasta
- * tocar el suelo no coincidía con el planeado, así que la bomba caía
- * a un lado u otro de la torreta en vez de encima).
+ * Ticks (nominales) que le quedan a la bomba hasta llegar a la
+ * ALTURA DE LA TORRETA (CANNON_OY) -- que es donde check_collisions()
+ * de verdad comprueba si la bomba acierta, NO cuando toca el suelo
+ * (GROUND_Y, bastante más abajo). Antes se apuntaba a GROUND_Y: la
+ * corrección de rumbo (vx) se repartía en el tiempo hasta tocar
+ * suelo, así que al llegar a la altura de la torreta -- donde de
+ * verdad se juzga el impacto -- la bomba aún no había terminado de
+ * centrarse, y a veces fallaba por poco aunque "en teoría" iba a
+ * caer justo encima. Apuntando a CANNON_OY, la x ya está corregida
+ * del todo para cuando importa.
+ *
+ * Se usa tanto al lanzarla como, cada tick, para RECALCULAR la vx
+ * necesaria -- así el impacto siempre cae justo en TURRET_X sin
+ * importar que el dt real fluctúe de un tick a otro (antes se
+ * calculaba una vez al lanzar asumiendo un tick nominal fijo, y con
+ * el dt real variable el número de ticks reales hasta llegar no
+ * coincidía con el planeado, así que la bomba caía a un lado u otro
+ * de la torreta en vez de encima).
  */
 static int bomb_ticks_to_ground(int32_t y, int32_t vy, int32_t ay) {
     int32_t sim_vy=vy, sim_y=y;
     for (int t=1; t<=500; t++) {
         sim_vy += ay; sim_y += sim_vy;
-        if (FP2PX(sim_y) >= GROUND_Y) return t;
+        if (FP2PX(sim_y) >= CANNON_OY) return t;
     }
     return 500;
 }
@@ -873,9 +883,20 @@ static void update_bombs(void) {
     for (int i=0;i<MAX_BOMBS;i++) {
         Bomb *b = &bombs[i]; if (!b->active) continue;
 
-        int rem = bomb_ticks_to_ground(b->y, b->vy, b->ay);
-        if (rem < 1) rem = 1;
-        b->vx = (PX2FP(TURRET_X) - b->x) / rem;
+        /*
+         * Solo recalculamos vx (homing hacia TURRET_X) mientras la
+         * bomba TODAVÍA no ha llegado a la altura de la torreta.
+         * Una vez pasada esa altura (falló o ya no hay nada que
+         * comprobar), "rem" se quedaría clavado en 1 tick para
+         * siempre y cada frame intentaría cerrar TODA la distancia
+         * restante de golpe -- un bandazo visible en la caída en
+         * vez de seguir recta hasta salir de pantalla.
+         */
+        if (FP2PX(b->y) < CANNON_OY) {
+            int rem = bomb_ticks_to_ground(b->y, b->vy, b->ay);
+            if (rem < 1) rem = 1;
+            b->vx = (PX2FP(TURRET_X) - b->x) / rem;
+        }
 
         b->vy += b->ay;
         b->x  += b->vx * g_dt_scale / FP;
@@ -1464,41 +1485,87 @@ static void draw_playing_frame(void) {
 // ---------------------------------------------------------------------------
 // Pantallas estáticas
 // ---------------------------------------------------------------------------
+
+/*
+ * Torreta y paracaidista decorativos para la pantalla de título --
+ * mismas primitivas que draw_turret()/draw_para() (fill_top_ellipse,
+ * draw_chute_filled, draw_soldier_at, line con can_dx/can_dy), pero
+ * en tamaño propio y sin depender del estado de partida
+ * (cannon_alive/cannon_angle_deg/Para), para poder colocarlos donde
+ * convenga en una pantalla estática. El dibujo anterior (un par de
+ * rectángulos sueltos) no llegaba a parecerse a una torreta ni a un
+ * paracaidista -- esto reutiliza la forma real del juego, solo que
+ * un poco más grande para que se lea bien como decoración.
+ */
+#define TITLE_TURRET_BASE_W   26
+#define TITLE_TURRET_BASE_H   20
+#define TITLE_TURRET_RX       9
+#define TITLE_TURRET_RY       14
+#define TITLE_TURRET_GUN_LEN  18
+#define TITLE_TURRET_GUN_W    2
+#define TITLE_TURRET_GUN_ANGLE (-18)   // grados, misma convención que cannon_angle_deg
+
+static void draw_title_turret(int tx, int ground_y) {
+    int base_top = ground_y - TITLE_TURRET_BASE_H;
+
+    renderer_fill_rect(
+        tx - TITLE_TURRET_BASE_W/2, base_top,
+        TITLE_TURRET_BASE_W, TITLE_TURRET_BASE_H,
+        COLOR_TURRET_BASE
+    );
+    fill_top_ellipse(tx, base_top, TITLE_TURRET_RX, TITLE_TURRET_RY, COLOR_TURRET_BASE);
+    renderer_fill_rect(tx-1, base_top-TITLE_TURRET_RY+2, 2, 2, COLOR_BLACK);
+
+    int ox = tx;
+    int oy = base_top - TITLE_TURRET_RY/2;
+    int dx = can_dx(TITLE_TURRET_GUN_ANGLE);
+    int dy = can_dy(TITLE_TURRET_GUN_ANGLE);
+    int tip_x = ox + dx*TITLE_TURRET_GUN_LEN/256;
+    int tip_y = oy + dy*TITLE_TURRET_GUN_LEN/256;
+
+    for (int t=-TITLE_TURRET_GUN_W; t<=TITLE_TURRET_GUN_W; t++) {
+        int ex = (int)(t*(-dy)/256);
+        int ey = (int)(t*( dx)/256);
+        line(ox+ex, oy+ey, tip_x+ex, tip_y+ey, COLOR_TURRET_GUN);
+    }
+}
+
+#define TITLE_PARA_RW 10
+#define TITLE_PARA_RH 8
+
+static void draw_title_para(int px, int hang_y) {
+    int db = hang_y - TITLE_PARA_RH;
+    draw_chute_filled(px, db, TITLE_PARA_RW, TITLE_PARA_RH, COLOR_CHUTE);
+    line(px-TITLE_PARA_RW, db, px, hang_y, COLOR_CHUTE);
+    line(px+TITLE_PARA_RW, db, px, hang_y, COLOR_CHUTE);
+    line(px-2, hang_y, px+2, hang_y, COLOR_CHUTE);
+    draw_soldier_at(px, hang_y+SOLDIER_H, false, COLOR_SOLDIER);
+}
+
 void draw_title_screen(void) {
-    // Limpiar pantalla rellenándola de negro y marcando el búfer como sucio
-     renderer_clear(COLOR_BLACK);
+    renderer_clear(COLOR_BLACK);
 
-    // --- 1. TÍTULO PRINCIPAL (Centrado arriba) ---
-    // Ancho aproximado de "PARATROOPER" con escala 3: 11 letras * 6 píxeles * 3 = 198 píxeles.
-    // Centrado horizontal en 320: (320 - 198) / 2 = 61
-    st7789_draw_text(61, 15, "PARATROOPER", COLOR_WHITE, COLOR_BLACK, 3);
+    // --- Título, centrado de verdad (centered_x mide el ancho real
+    // de la fuente en vez de asumirlo a mano) ---
+    static const char *title = "PARATROOPER";
+    st7789_draw_text(centered_x(title, 3), 10, title, COLOR_WHITE, COLOR_BLACK, 3);
 
-    // --- 2. DIBUJO CENTRAL (Torreta en el medio y paracaidistas a los lados) ---
-    // Paracaidista izquierdo (Aprox X=60, Y=55)
-    st7789_fill_rect(57, 50, 6, 6, COLOR_CYAN);   // Paracaídas
-    st7789_draw_pixel(60, 58, COLOR_WHITE);       // Cuerpo
+    renderer_fill_rect(30, 38, TFT_WIDTH-60, 2, COLOR_TURRET_GUN);
 
-    // Torreta central en la base (X=160, Y=65)
-    st7789_fill_rect(150, 62, 20, 10, COLOR_GREEN); // Base de la torreta
-    st7789_fill_rect(159, 54, 3, 10, COLOR_GREEN);  // Cañón
+    // --- Escena decorativa: dos paracaidistas bajando hacia la
+    // torreta central, con las mismas formas que se ven en partida ---
+    draw_title_para(66, 58);
+    draw_title_turret(CX, 108);
+    draw_title_para(254, 58);
 
-    // Paracaidista derecho (Aprox X=260, Y=55)
-    st7789_fill_rect(257, 50, 6, 6, COLOR_CYAN);  // Paracaídas
-    st7789_draw_pixel(260, 58, COLOR_WHITE);      // Cuerpo
+    // --- Instrucciones -- centradas, con hueco de sobra antes del
+    // "PULSA A/B PARA JUGAR" parpadeante que pinta pt_tick() más abajo ---
+    static const char *line1 = "GIRA Y DISPARA";
+    static const char *line2 = "DEFIENDE LA TORRETA";
 
-    // --- 3. TEXTOS E INSTRUCCIONES (Tamaño 2, centrados y con colores distintos) ---
-    // Cada carácter en escala 2 ocupa 12 píxeles de ancho (6 * 2).
+    st7789_draw_text(centered_x(line1, 2), 155, line1, COLOR_YELLOW, COLOR_BLACK, 2);
+    st7789_draw_text(centered_x(line2, 2), 183, line2, COLOR_CYAN, COLOR_BLACK, 2);
 
-    // Línea: "GIRA Y DISPARA" (14 chars -> ~168 px de ancho -> X = 76)
-    st7789_draw_text(76, 95, "GIRA Y DISPARA", COLOR_YELLOW, COLOR_BLACK, 2);
-
-    // Línea: "DEFIENDE LA BASE" (16 chars -> ~192 px de ancho -> X = 64)
-    st7789_draw_text(64, 125, "DEFIENDE LA BASE", COLOR_CYAN, COLOR_BLACK, 2);
-
-    // Línea: "PARACAIDISTAS" (13 chars -> ~156 px de ancho -> X = 82)
-    st7789_draw_text(82, 155, "PARACAIDISTAS", COLOR_RED, COLOR_BLACK, 2);
-
-    // Volcar el búfer completo a la pantalla física
     renderer_flush();
 }
 

@@ -46,6 +46,27 @@ bool controls_menu_up(void);
 bool controls_menu_down(void);
 bool controls_menu_select(void); /* cualquiera de los 6 botones, agregados */
 
+/*
+ * Descarta cualquier giro de encoder acumulado en el "pending" de
+ * controls_menu_up()/down(), sin tocar el conteo crudo ni el
+ * acumulador de controls_get_raw_delta() -- esos siguen su curso
+ * normal.
+ *
+ * controls_update() sigue rellenando "pending" aunque nada lo
+ * consuma, así que una pantalla larga que no llama a
+ * controls_menu_up()/down() (un juego, que lee el encoder con
+ * controls_get_raw_delta(); o una prueba que lee
+ * controls_debug_raw_count() directamente) deja ahí acumulado
+ * cualquier giro real que haya habido mientras tanto. Sin este
+ * reset, ese giro se "dispara" de golpe como un movimiento de
+ * navegación en cuanto se vuelve a llamar a controls_menu_up()/
+ * down(), aunque el encoder ya no se esté tocando.
+ *
+ * Llamar justo al volver al menú desde cualquiera de esas
+ * pantallas, antes de procesar más navegación.
+ */
+void controls_reset_menu_nav(void);
+
 /* --- API para juegos --- */
 
 /* ¿Se pulsó este botón (flanco, con debounce) en el último

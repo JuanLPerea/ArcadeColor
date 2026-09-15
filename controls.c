@@ -266,6 +266,26 @@ bool controls_menu_select(void)
     return false;
 }
 
+/*
+ * Vacía el acumulador de navegación de menú (ver comentario en
+ * controls.h). enc1_last_count/enc2_last_count NO se tocan: siguen
+ * siendo la posición cruda "de referencia", así que el próximo
+ * controls_update() vuelve a calcular pending desde cero de forma
+ * correcta en vez de generar un salto.
+ *
+ * También se reinicia last_step_time -- si no, un giro real que
+ * llegue justo después de volver al menú podría heredar un
+ * debounce ya "gastado" de antes de entrar en la pantalla anterior
+ * y disparar un paso de más pronto de la cuenta.
+ */
+void controls_reset_menu_nav(void)
+{
+    enc1_pending = 0;
+    enc2_pending = 0;
+    enc1_last_step_time = get_absolute_time();
+    enc2_last_step_time = get_absolute_time();
+}
+
 /* ¿Se pulsó este botón (flanco) en el último controls_update()?
  * btn: uno de los BTN_* de controls.h. */
 bool controls_button_pressed(int btn)
