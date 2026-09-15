@@ -1491,10 +1491,10 @@ static void menu_music_playlist_tick(void)
      * Estamos en el silencio entre canciones.
      */
     if (playlist_silent) {
+        sound_stop_menu_music();
         if (playlist_ms >= MENU_MUSIC_SILENCE_MS) {
             playlist_track =
                 (playlist_track + 1) % SOUND_MENU_TRACK_COUNT;
-
             menu_music_playlist_resume();
         }
 

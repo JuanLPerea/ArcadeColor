@@ -185,7 +185,7 @@ static inline int16_t can_dy(int a) { return -cos_deg(a); }
 #define ANGLE_MIN_DEG  (-75)
 #define ANGLE_MAX_DEG  ( 75)
 #define ANGLE_UP_DEG   (  0)
-#define CANNON_ROT_SPD  1
+#define CANNON_ROT_SPD  2
 
 // ---------------------------------------------------------------------------
 // Torre / escalera -- march/climb se dejan en ticks discretos (sin dt),
@@ -423,7 +423,7 @@ static void draw_chute_filled(int cx, int cy, int rw, int rh, uint16_t color) {
 #define COLOR_TURRET_GUN   COLOR_CYAN
 #define COLOR_HELI_BODY    COLOR_WHITE
 #define COLOR_HELI_ACCENT  COLOR_MAGENTA
-#define COLOR_SOLDIER      COLOR_WHITE
+#define COLOR_SOLDIER      COLOR_GREEN
 #define COLOR_CHUTE        COLOR_CYAN
 #define COLOR_JET          COLOR_CYAN
 #define COLOR_BOMB         COLOR_MAGENTA
@@ -854,7 +854,7 @@ static void update_plane(void) {
                  * el suelo, sin apenas margen para dispararle; ahora
                  * tarda ~3s) para que dé tiempo real a acertarla.
                  */
-                int32_t vy0 = 14, ay = 3;
+                int32_t vy0 = 24, ay = 3;
                 int tof = bomb_ticks_to_ground(by, vy0, ay);
                 int32_t vx = (PX2FP(TURRET_X) - bx) / tof;
                 bombs[bi].active=true;
@@ -979,12 +979,19 @@ static void check_collisions(void) {
 
     for (int i=0;i<MAX_BOMBS;i++) {
         Bomb *b = &bombs[i]; if (!b->active) continue;
-        if (chit(FP2PX(b->x),FP2PX(b->y),3,CANNON_OX,CANNON_OY,TURRET_R)) {
-            b->active = cannon_alive = false;
-            spawn_expl(CANNON_OX,CANNON_OY,18,5,32);
-            sound_effect_explosion(); return;
-        }
+        int bx = FP2PX(b->x);
+        int by = FP2PX(b->y);
+    
+    // Si la bomba baja a la altura de la torreta (o más) y está alineada horizontalmente con ella
+    if (by >= CANNON_OY && absi(bx - TURRET_X) < (BASE_W / 2 + 4)) {
+        b->active = cannon_alive = false;
+        spawn_expl(CANNON_OX, CANNON_OY, 18, 5, 32);
+        sound_effect_explosion(); 
+        return;
     }
+    }
+
+
     for (int i=0;i<MAX_HELIS;i++) {
         if (!helis[i].active) continue;
         if (chit(FP2PX(helis[i].x),helis[i].y,10,CANNON_OX,CANNON_OY,TURRET_R)) {
@@ -1457,14 +1464,41 @@ static void draw_playing_frame(void) {
 // ---------------------------------------------------------------------------
 // Pantallas estáticas
 // ---------------------------------------------------------------------------
-static void draw_title_screen(void) {
-    renderer_clear(COLOR_BLACK);
-    st7789_draw_text(centered_x("PARATROOPER",3), CY-70, "PARATROOPER", COLOR_GREEN, COLOR_BLACK, 3);
-    st7789_draw_text(centered_x("ENC1: ROTAR CANON",1), CY-20, "ENC1: ROTAR CANON", COLOR_WHITE, COLOR_BLACK, 1);
-    st7789_draw_text(centered_x("BOTON A/B: DISPARAR",1), CY-4, "BOTON A/B: DISPARAR", COLOR_WHITE, COLOR_BLACK, 1);
-    st7789_draw_text(centered_x("GIRO ENCODER: SALIR",1), CY+12, "GIRO ENCODER: SALIR", COLOR_WHITE, COLOR_BLACK, 1);
-    prev_center_msg[0]='\0';
-    prev_bottom_msg[0]='\0';
+void draw_title_screen(void) {
+    // Limpiar pantalla rellenándola de negro y marcando el búfer como sucio
+     renderer_clear(COLOR_BLACK);
+
+    // --- 1. TÍTULO PRINCIPAL (Centrado arriba) ---
+    // Ancho aproximado de "PARATROOPER" con escala 3: 11 letras * 6 píxeles * 3 = 198 píxeles.
+    // Centrado horizontal en 320: (320 - 198) / 2 = 61
+    st7789_draw_text(61, 15, "PARATROOPER", COLOR_WHITE, COLOR_BLACK, 3);
+
+    // --- 2. DIBUJO CENTRAL (Torreta en el medio y paracaidistas a los lados) ---
+    // Paracaidista izquierdo (Aprox X=60, Y=55)
+    st7789_fill_rect(57, 50, 6, 6, COLOR_CYAN);   // Paracaídas
+    st7789_draw_pixel(60, 58, COLOR_WHITE);       // Cuerpo
+
+    // Torreta central en la base (X=160, Y=65)
+    st7789_fill_rect(150, 62, 20, 10, COLOR_GREEN); // Base de la torreta
+    st7789_fill_rect(159, 54, 3, 10, COLOR_GREEN);  // Cañón
+
+    // Paracaidista derecho (Aprox X=260, Y=55)
+    st7789_fill_rect(257, 50, 6, 6, COLOR_CYAN);  // Paracaídas
+    st7789_draw_pixel(260, 58, COLOR_WHITE);      // Cuerpo
+
+    // --- 3. TEXTOS E INSTRUCCIONES (Tamaño 2, centrados y con colores distintos) ---
+    // Cada carácter en escala 2 ocupa 12 píxeles de ancho (6 * 2).
+
+    // Línea: "GIRA Y DISPARA" (14 chars -> ~168 px de ancho -> X = 76)
+    st7789_draw_text(76, 95, "GIRA Y DISPARA", COLOR_YELLOW, COLOR_BLACK, 2);
+
+    // Línea: "DEFIENDE LA BASE" (16 chars -> ~192 px de ancho -> X = 64)
+    st7789_draw_text(64, 125, "DEFIENDE LA BASE", COLOR_CYAN, COLOR_BLACK, 2);
+
+    // Línea: "PARACAIDISTAS" (13 chars -> ~156 px de ancho -> X = 82)
+    st7789_draw_text(82, 155, "PARACAIDISTAS", COLOR_RED, COLOR_BLACK, 2);
+
+    // Volcar el búfer completo a la pantalla física
     renderer_flush();
 }
 
