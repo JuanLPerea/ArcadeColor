@@ -2093,16 +2093,32 @@ void sound_update(void)
         save_and_disable_interrupts();
 
 
-    music_index++;
+music_index++;
 
+if (
+    music_index >=
+    menu_tracks[menu_track].count
+) {
+    music_index = 0;
+    menu_music_playing = false;
 
-    if (
-        music_index >=
-        menu_tracks[menu_track].count
-    ) {
-        music_index = 0;
-    }
+    configure_channel(
+        &channel1,
+        0,
+        0,
+        WAVE_TRIANGLE
+    );
 
+    configure_channel(
+        &channel2,
+        0,
+        0,
+        WAVE_TRIANGLE
+    );
+
+    restore_interrupts(save);
+    return;
+}
 
     uint16_t melody =
         menu_tracks[menu_track].melody[music_index];
@@ -2141,6 +2157,8 @@ bool sound_menu_music_is_playing(void)
 {
     return menu_music_playing;
 }
+
+
 
 
 /* ============================================================

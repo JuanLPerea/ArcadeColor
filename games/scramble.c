@@ -96,12 +96,12 @@
 #define SCREEN_W 320
 #define SCREEN_H 240
 
-#define PLAY_X   4
-#define PLAY_Y   3
-#define PLAY_W   (SCREEN_W - 2 * PLAY_X)   // 312
-#define PLAY_H   (SCREEN_H - 2 * PLAY_Y)   // 234
-#define CX       (PLAY_X + PLAY_W / 2)
-#define CY       (PLAY_Y + PLAY_H / 2)
+#define PLAY_X   0
+#define PLAY_Y   0
+#define PLAY_W   SCREEN_W   // 312
+#define PLAY_H   SCREEN_H    // 234
+#define CX       (SCREEN_W / 2)
+#define CY       (SCREEN_H / 2)
 
 #define TICKS_S  60   // referencia nominal para pausas simples (no rítmicas)
 #define ZONE_BANNER_TICKS (TICKS_S * 2)   // duración del rótulo de zona sobreimpreso
@@ -158,6 +158,7 @@ static int ship_vel = 0;
 static int ship_x  = SHIP_X_MIN;
 static int ship_vx = 0;
 static int ship_y, ship_inv_ticks;
+static int centered_x(const char *text, int scale);
 
 static int enc_momentum(int enc_raw, int *vel) {
     if (enc_raw > 0) {
@@ -541,9 +542,46 @@ static int  blink, demo_ticks, pause_cnt;
 static int  lives, level, score, fuel, fuel_cd;
 static int  zone;
 static int  zone_banner_ticks;   // ver draw_zone_banner()
+static int extra_life_banner_ticks;
 static int32_t scroll_px, next_spawn_world;
 static int  scroll_acc, scroll_spd;
 static int  shoot_cd, bomb_cd;
+
+// Vida extra cada EXTRA_LIFE_SCORE puntos (5000). next_extra_life
+// guarda el próximo umbral a superar; se reinicia en game_start().
+// Usa un "while" en vez de un "if" porque un bonus grande de una
+// sola vez (p.ej. destruir al jefe: SCR_ALIEN_BONUS*level, que ya
+// supera los 5000 a partir del nivel 2) puede cruzar más de un
+// umbral de golpe -- así se conceden todas las vidas que tocan, no
+// solo una.
+#define EXTRA_LIFE_SCORE 5000
+static int  next_extra_life;
+
+static void check_extra_life(void) {
+    while (score >= next_extra_life) {
+        lives++;
+        sound_effect_stop();
+        sound_effect_extra_life();
+
+        // Mostrar aviso de vida extra
+        extra_life_banner_ticks = TICKS_S * 2;
+
+        next_extra_life += EXTRA_LIFE_SCORE;
+    }
+}
+
+static void draw_extra_life_banner(void) {
+    if (extra_life_banner_ticks <= 0) return;
+
+    const char *txt = "EXTRA LIFE!";
+    const int fs = 2;
+
+    renderer_draw_text(centered_x(txt, fs), CY - 90,
+                       txt,
+                       COLOR_YELLOW,
+                       COLOR_BLACK,
+                       fs);
+}
 
 static int fuel_ticks_for_level(void) {
     int t = 20 - (level-1)*2;
@@ -559,6 +597,7 @@ static void try_shoot(void);
 static void try_bomb(void);
 static void damage_object(int idx);
 static void draw_field_static(void);
+
 static void draw_ready_screen(void);
 static bool check_alien_hit(float x, float y, int w, int h);
 static void enemy_fire(float ox, float oy);
@@ -581,7 +620,8 @@ static void ship_respawn(void) {
 }
 
 static void game_start(void) {
-    lives = 99; level = 1; zone = ZONE_STEEP_MOUNTAINS; score = 0;
+    lives = 3; level = 1; zone = ZONE_STEEP_MOUNTAINS; score = 0;
+    next_extra_life = EXTRA_LIFE_SCORE;
     fuel = FUEL_MAX; fuel_cd = fuel_ticks_for_level();
     scroll_px = 0; scroll_acc = 0;
     scroll_spd = SCROLL_SPD0;
@@ -1399,6 +1439,7 @@ static void draw_zone_banner(void) {
                         COLOR_YELLOW, COLOR_BLACK, fs);
 }
 
+
 static void draw_playing_frame(void) {
     draw_terrain();
     draw_objects();
@@ -1410,6 +1451,7 @@ static void draw_playing_frame(void) {
     if (state == SCR_PLAYING || state == SCR_DEAD) draw_ship();
     draw_hud();
     draw_zone_banner();
+    draw_extra_life_banner();
     renderer_flush();
 }
 
@@ -1418,8 +1460,8 @@ static void draw_playing_frame(void) {
 // ---------------------------------------------------------------------------
 static void draw_field_static(void) {
     renderer_clear(COLOR_BLACK);
-    renderer_fill_rect(PLAY_X, PLAY_Y,          PLAY_W, 1, COLOR_WHITE);
-    renderer_fill_rect(PLAY_X, PLAY_Y+PLAY_H-1, PLAY_W, 1, COLOR_WHITE);
+   // renderer_fill_rect(PLAY_X, PLAY_Y,          PLAY_W, 1, COLOR_WHITE);
+   // renderer_fill_rect(PLAY_X, PLAY_Y+PLAY_H-1, PLAY_W, 1, COLOR_WHITE);
     renderer_flush();
 }
 
@@ -1532,7 +1574,14 @@ static void draw_scores_screen(void) {
 // ---------------------------------------------------------------------------
 static void scr_tick(void) {
     blink++;
-    if (zone_banner_ticks > 0) zone_banner_ticks--;
+
+    if (zone_banner_ticks > 0)
+    zone_banner_ticks--;
+
+    if (extra_life_banner_ticks > 0)
+    extra_life_banner_ticks--;
+
+    check_extra_life();   // vida extra cada EXTRA_LIFE_SCORE puntos
 
     if (demo) {
         bool any = controls_menu_select()

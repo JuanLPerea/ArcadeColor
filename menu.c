@@ -1483,16 +1483,26 @@ static void menu_music_playlist_tick(void)
 {
     playlist_ms += 15;
 
+    /*
+     * Estamos en el silencio entre canciones.
+     */
     if (playlist_silent) {
         if (playlist_ms >= MENU_MUSIC_SILENCE_MS) {
-            playlist_track = (playlist_track + 1) % SOUND_MENU_TRACK_COUNT;
+            playlist_track =
+                (playlist_track + 1) % SOUND_MENU_TRACK_COUNT;
+
             menu_music_playlist_resume();
         }
+
         return;
     }
 
-    if (playlist_ms >= sound_menu_track_duration_ms(playlist_track)) {
-        sound_stop_menu_music();
+    /*
+     * La pista ha terminado realmente.
+     * sound_update() pone menu_music_playing = false
+     * al procesar la última nota.
+     */
+    if (!sound_menu_music_is_playing()) {
         playlist_silent = true;
         playlist_ms = 0;
     }
